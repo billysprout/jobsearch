@@ -126,6 +126,23 @@ function pruneOldDigestState() {
   }
 }
 
+// --- Debug snapshots: what the pipeline saw at each stage of the most
+// recent run, so "why didn't X show up" can be answered by reading a file
+// instead of writing a throwaway inspection script (as happened during the
+// 2026-08-24 pipeline audit). Overwritten every run — these are a "what
+// happened last time" snapshot, not accumulated history. Written on every
+// run including --dry-run: unlike seen.json/digest state, these don't feed
+// back into future pipeline decisions, so writing them doesn't compromise
+// dry-run's "no effect on future behavior" guarantee.
+function writeSnapshot(name, postings) {
+  mkdirSync(STATE_DIR, { recursive: true });
+  const rows = postings.map(p => ({
+    source: p.source, id: p.id, company: p.company, title: p.title, url: p.url,
+    matchedTrack: p._matchedTrack, matchedKeyword: p._matchedKeyword,
+  }));
+  writeFileSync(join(STATE_DIR, `last-run-${name}.json`), JSON.stringify(rows, null, 2));
+}
+
 // --- Pre-filter (word-boundary keyword matching, see keywords.mjs) ---
 function preFilter(postings) {
   const matched = [];
@@ -135,6 +152,10 @@ function preFilter(postings) {
     const text = `${p.title} ${p.company} ${p.bodyText}`.toLowerCase();
     const hit = firstTrackMatch(text, config.tracks);
     if (hit) {
+      // Stashed for the debug snapshot below — lets you see *why* something
+      // matched without re-running the filter logic by hand.
+      p._matchedTrack = hit.track;
+      p._matchedKeyword = hit.keyword;
       matched.push(p);
     } else {
       unmatched++;
@@ -260,11 +281,21 @@ async function main() {
   // 2. Keyword pre-filter (BEFORE dedupe now — see header comment)
   console.error("[main] step 2/6: keyword pre-filter...");
   const matched = preFilter(allPostings);
+  // PRE-seen-filter snapshot: everything that matched a track keyword this
+  // run, including postings already seen in a prior run. Answers "did this
+  // posting even pass the keyword filter at all?" — see jobscrape/state/last-run-matched.json
+  writeSnapshot("matched", matched);
 
   // 3. Drop already-seen (only matched postings ever touch `seen`)
   console.error("[main] step 3/6: deduping against seen state...");
   const freshMatched = matched.filter(p => !seen.has(`${p.source}:${p.id}`));
   console.error(`[dedupe] ${freshMatched.length} new-and-relevant, ${matched.length - freshMatched.length} already seen`);
+  // POST-seen-filter snapshot: the actual eligible pool this run drew
+  // candidates from, before source-priority sorting and --limit capping.
+  // Answers "why wasn't this scored" for anything NOT in this file despite
+  // being in last-run-matched.json — it was filtered here, as already-seen.
+  // See jobscrape/state/last-run-eligible.json
+  writeSnapshot("eligible", freshMatched);
 
   if (!freshMatched.length) {
     console.error("[main] nothing new to rank -- done");

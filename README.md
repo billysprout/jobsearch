@@ -103,6 +103,19 @@ IT/DevOps, producer-PM) → drop already-seen postings → sort so curated ATS s
 heuristic fallback) → mark only the ranked set as seen → merge into today's accumulated
 digest → write.
 
+**Debug snapshots** — every run (including `--dry-run`) overwrites two inspection files
+so "why didn't X show up" can be answered by reading a file instead of writing a
+throwaway script:
+- `jobscrape/state/last-run-matched.json` — everything that matched a track keyword this
+  run, **before** the seen-filter (includes postings already surfaced in an earlier run).
+  Each entry carries `matchedTrack`/`matchedKeyword` so you can see *why* it matched.
+- `jobscrape/state/last-run-eligible.json` — the subset of the above that was **not**
+  already seen — the actual pool `--limit`/source-priority sorting drew candidates from.
+  If a posting is in `matched` but not `eligible`, it was filtered out here as
+  already-seen; if it's not in `matched` at all, it never passed the keyword filter.
+
+Both are gitignored (`jobscrape/state/`) — runtime output, not source.
+
 **Scheduling**: Windows Task Scheduler, task `OpenClaw-JobScrape`, daily 07:00,
 `--limit 10` (see colibri throughput note below for why the cap is that low —
 `jobscrape/register-task.ps1` registers it).
