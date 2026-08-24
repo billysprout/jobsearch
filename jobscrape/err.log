@@ -1,0 +1,8 @@
+[state] 851 previously seen postings
+[main] === jobscrape 2026-08-23T17:59:32.089Z ===
+[main] dry-run=true  no-colibri=true  limit=10
+[main] step 1/5: fetching sources...
+[sources] total fetched: 851
+[main] step 2/5: deduping...
+[dedupe] 0 new, 851 already seen
+[main] no new postings -- done

@@ -1,0 +1,39 @@
+{
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "auth": { "mode": "token" }
+  },
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "tools": {
+    "deny": [
+      "gateway",
+      "cron",
+      "nodes",
+      "sessions_spawn",
+      "sessions_send",
+      "browser",
+      "web_search",
+      "web_fetch"
+    ],
+    "fs": { "workspaceOnly": true },
+    "exec": {
+      "security": "full",
+      "applyPatch": { "workspaceOnly": true }
+    },
+    "elevated": { "enabled": false }
+  },
+  "agents": {
+    "defaults": {
+      "model": { "primary": "zai/glm-5.3" },
+      "sandbox": { "mode": "off" }
+    }
+  },
+  "models": {
+    "providers": {
+      "zai": { "baseUrl": "https://api.z.ai/api/coding/paas/v4" }
+    }
+  }
+}

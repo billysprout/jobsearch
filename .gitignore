@@ -1,0 +1,10 @@
+.env
+.env.bak
+
+# jobscrape runtime state — generated output, not source
+jobscrape/state/
+jobscrape/staging/
+jobscrape/logs/
+
+# scratch space — working notes, not durable docs
+scratch/

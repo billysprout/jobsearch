@@ -1,0 +1,14 @@
+{
+  "name": "mcp-colibri",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "MCP tool server that proxies requests to a local colibri model endpoint",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.23.0"
+  }
+}

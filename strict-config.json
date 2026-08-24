@@ -1,0 +1,23 @@
+{
+  "tools": {
+    "deny": [
+      "gateway",
+      "cron",
+      "nodes",
+      "sessions_spawn",
+      "sessions_send",
+      "browser",
+      "web_search",
+      "web_fetch",
+      "exec",
+      "process"
+    ],
+    "fs": { "workspaceOnly": true },
+    "exec": {
+      "security": "deny",
+      "ask": "always",
+      "applyPatch": { "workspaceOnly": true }
+    },
+    "elevated": { "enabled": false }
+  }
+}

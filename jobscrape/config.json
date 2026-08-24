@@ -1,0 +1,86 @@
+{
+  "colibri": {
+    "baseUrl": "http://localhost:8000/v1",
+    "model": "glm-5.2-colibri",
+    "timeoutMs": 900000,
+    "chunkSize": 1
+  },
+  "workspaceVolume": "openclaw-sandbox_openclaw-workspace",
+  "workspacePath": "/home/node/.openclaw/workspace/jobs",
+  "dailyCap": 40,
+  "tracks": {
+    "esports": {
+      "label": "Esports / Gaming Ops",
+      "keywords": [
+        "esport", "esports", "tournament", "competitive gaming",
+        "league ops", "valorant", "cs2", "counter-strike", "dota",
+        "league of legends", "rocket league", "overwatch", "fortnite",
+        "smash", "fighting game", "broadcast", "shoutcast",
+        "scouting", "game ops", "live ops", "production assistant",
+        "observer", "faceit", "pml"
+      ],
+      "weight": 1.0
+    },
+    "it-devops": {
+      "label": "IT / Sysadmin / DevOps",
+      "keywords": [
+        "sysadmin", "system admin", "system administrator",
+        "devops", "sre", "site reliability", "platform engineer",
+        "infrastructure", "cloud engineer", "aws", "azure", "gcp",
+        "kubernetes", "docker", "terraform", "ansible", "puppet",
+        "linux admin", "windows admin", "network engineer",
+        "it support", "helpdesk", "desktop support",
+        "security engineer", "soc analyst", "incident response",
+        "noc"
+      ],
+      "weight": 0.8
+    },
+    "producer-pm": {
+      "label": "Producer / Project Management",
+      "keywords": [
+        "producer", "project manager", "program manager", "tpm",
+        "technical program manager", "delivery manager",
+        "scrum master", "agile coach", "product owner",
+        "project coordinator", "operations manager",
+        "content producer", "creative producer",
+        "production coordinator", "line producer",
+        "studio manager", "broadcast producer",
+        "technical producer", "associate producer"
+      ],
+      "weight": 0.9
+    }
+  },
+  "sources": {
+    "remoteok": { "enabled": true },
+    "remotive": { "enabled": true },
+    "wwr": { "enabled": false },
+    "hn": { "enabled": true },
+    "greenhouse": { "enabled": true },
+    "lever": { "enabled": false }
+  },
+  "ats": {
+    "greenhouse": {
+      "riotgames": { "label": "Riot Games" },
+      "epicgames": { "label": "Epic Games" },
+      "roblox": { "label": "Roblox" },
+      "discord": { "label": "Discord" }
+    },
+    "lever": {
+      "eslgaming": { "label": "ESL" },
+      "100thieves": { "label": "100 Thieves" },
+      "teamliquid": { "label": "Team Liquid" },
+      "netflix": { "label": "Netflix" },
+      "vercel": { "label": "Vercel" }
+    }
+  },
+  "wwr": {
+    "categories": [
+      "product",
+      "project-management",
+      "devops-sysadmin",
+      "customer-support",
+      "design",
+      "software-eng"
+    ]
+  }
+}

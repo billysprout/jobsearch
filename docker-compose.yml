@@ -1,0 +1,220 @@
+# OpenClaw — hardened single-operator sandbox deployment
+#
+# Boundary model:
+#   [Windows host] > [Docker Desktop WSL2 VM] > [gateway container] > agent tools
+#
+# The gateway container IS the agent sandbox:
+#   - named volumes only — no host bind mounts, so no path from the agent to C:\
+#   - NO Docker socket mounted, per-agent docker sandbox stays OFF
+#   - egress ONLY through the squid allowlist proxy (api.z.ai / open.bigmodel.cn);
+#     the gateway sits on an internal network with no direct route to the internet
+#   - read-only rootfs, cap_drop ALL, no-new-privileges, non-root (node, uid 1000)
+#   - gateway binds loopback; host port published to 127.0.0.1 only (never LAN)
+#
+# See SECURITY-REVIEW.md for the escape-path analysis behind every choice here.
+
+name: openclaw-sandbox
+
+services:
+  # ---------------------------------------------------------------- egress ---
+  # Squid allowlist proxy — the ONLY container with a route to the internet.
+  # Every denied connection is logged: `docker compose logs egress`
+  # is the exfiltration-attempt detector for this deployment.
+  egress:
+    build: ./egress
+    image: openclaw-egress:local
+    networks: [internal, egress]
+    # operator-side config only — this container never runs agent code
+    volumes:
+      - ./egress/extra-domains.txt:/etc/squid/extra/extra-domains.txt:ro
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+
+  # ------------------------------------------------------------- gateway -----
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      # no mDNS broadcast of gateway presence
+      OPENCLAW_DISABLE_BONJOUR: "1"
+      # z.ai provider (key lives in .env; never committed)
+      ZAI_API_KEY: ${ZAI_API_KEY}
+      # Force outbound HTTP(S) through the allowlist proxy. Node 24 honors
+      # NODE_USE_ENV_PROXY for fetch/undici. NOTE: the proxy env vars are
+      # convenience only — the real control is that the internal network has
+      # no direct route out, so a process that ignores these vars simply
+      # fails to reach anything (fail-closed).
+      NODE_USE_ENV_PROXY: "1"
+      HTTP_PROXY: http://egress:3128
+      HTTPS_PROXY: http://egress:3128
+      NO_PROXY: localhost,127.0.0.1,mcp-colibri
+      TZ: ${OPENCLAW_TZ:-UTC}
+    # host.docker.internal resolves to the Windows host so the agent can reach a
+    # locally-running colibri model server (plain HTTP, port 8000). Traffic still
+    # flows through the squid proxy (forced by NODE_USE_ENV_PROXY + proxy env
+    # vars) — the gateway never gets a direct route out of its sealed network.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [internal]
+    # NOTHING from the host filesystem is mounted into this container.
+    volumes:
+      - openclaw-config:/home/node/.openclaw
+      - openclaw-workspace:/home/node/.openclaw/workspace
+      - openclaw-auth:/home/node/.config/openclaw
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+      - /home/node/.npm:size=128m,noexec,nosuid
+    init: true
+    restart: unless-stopped
+    # "lan" bind (all interfaces) is intentional here: the gateway sits on the
+    # sealed internal network whose only neighbors are the egress proxy and the
+    # loopback forwarder, and it has no published port of its own. Host access
+    # is ONLY via frontend -> 127.0.0.1:18789, token-authenticated. A loopback
+    # bind would be unreachable from the forwarder (different netns).
+    command: ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789"]
+    healthcheck:
+      test: ["CMD", "node", "dist/docker-healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    mem_limit: 2g
+    cpus: "2.0"
+    pids_limit: 256
+    depends_on: [egress]
+
+  # ---------------------------------------------------------------- cli ------
+  # Operator one-shot CLI. Shares the gateway's network namespace (loopback WS).
+  # Started only on demand:  docker compose run --rm cli <args...>
+  cli:
+    profiles: [cli]
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    network_mode: "service:openclaw-gateway"
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      ZAI_API_KEY: ${ZAI_API_KEY}
+      NODE_USE_ENV_PROXY: "1"
+      HTTP_PROXY: http://egress:3128
+      HTTPS_PROXY: http://egress:3128
+      NO_PROXY: localhost,127.0.0.1
+      TZ: ${OPENCLAW_TZ:-UTC}
+    volumes:
+      - openclaw-config:/home/node/.openclaw
+      - openclaw-workspace:/home/node/.openclaw/workspace
+      - openclaw-auth:/home/node/.config/openclaw
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+      - /home/node/.npm:size=128m,noexec,nosuid
+    init: true
+    stdin_open: true
+    tty: true
+    entrypoint: ["node", "dist/index.js"]
+    depends_on: [openclaw-gateway]
+
+  # ---------------------------------------------------------- mcp-colibri ----
+  # MCP tool server — exposes ask_colibri as a tool the agent can invoke.
+  # Proxies requests to the local colibri model on the Windows host through
+  # the squid egress proxy (same forced-proxy pattern as the gateway).
+  #
+  # The agent (running on z.ai) calls this tool on-demand; colibri's response
+  # comes back through the MCP SSE stream. Latency is 30-120s per call.
+  mcp-colibri:
+    build: ./mcp-colibri
+    image: mcp-colibri:local
+    networks: [internal]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      COLIBRI_BASE_URL: http://host.docker.internal:8000/v1
+      COLIBRI_MODEL: glm-5.2-colibri
+      # 45 min: colibri's own docs warn >500-token prompts can take 10+ min
+      # and "may exceed 15-min timeout" — the original 900000 (15 min) value
+      # was hit for real on a 922-token prompt. Kept under squid's 60-minute
+      # client_lifetime hard cap (egress/squid.conf) with margin.
+      COLIBRI_TIMEOUT_MS: "2700000"
+      LOG_LEVEL: "info"
+      # Force colibri requests through the squid allowlist proxy.
+      # squid's host_local ACL permits plain HTTP to host.docker.internal.
+      # Node 22 requires NODE_USE_ENV_PROXY=1 to honor HTTP_PROXY.
+      NODE_USE_ENV_PROXY: "1"
+      HTTP_PROXY: http://egress:3128
+      HTTPS_PROXY: http://egress:3128
+      NO_PROXY: localhost,127.0.0.1
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    mem_limit: 128m
+    cpus: "0.5"
+    pids_limit: 32
+    depends_on: [egress]
+
+  # ---------------------------------------------------------- frontend ------
+  # Loopback port publisher for the gateway (published ports don't function on
+  # internal networks — this forwarder is the documented R6 fallback in
+  # SECURITY-REVIEW.md). Inbound-only relay: host 127.0.0.1 -> gateway:18789.
+  frontend:
+    build: ./frontend
+    image: openclaw-frontend:local
+    networks: [internal, egress]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+    ports:
+      # loopback-only publish: reachable from THIS Windows host only, never LAN
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+    depends_on: [openclaw-gateway]
+
+networks:
+  # No default route to the internet for anything on this network.
+  internal:
+    internal: true
+  # Only the egress proxy + loopback forwarder are attached here.
+  egress: {}
+
+volumes:
+  openclaw-config: {}
+  openclaw-workspace: {}
+  openclaw-auth: {}

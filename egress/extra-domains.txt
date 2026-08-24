@@ -1,0 +1,14 @@
+# Widened allowlist — ships EMPTY (agent must never have npm egress).
+# `bash setup.sh egress-setup` writes registry.npmjs.org here for scripted
+# operator steps; `bash setup.sh egress-lockdown` empties it again.
+
+# WhatsApp channel (linked-device transport) — added 2026-08-23, see SECURITY-REVIEW §3 row 15
+.whatsapp.net
+.whatsapp.com
+
+# Baileys (WhatsApp plugin transport) fetches its protocol version from GitHub raw
+# on every connect/reconnect, not just first login; a denied fetch falls back to a
+# bundled version that WhatsApp's servers reject outright, causing a reconnect loop.
+# No ssl_bump here, so squid can't scope this to a path — exact host only (not a
+# wildcard suffix) to keep it as tight as this proxy allows. See SECURITY-REVIEW §3 row 15.
+raw.githubusercontent.com
