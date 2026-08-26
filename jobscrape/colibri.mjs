@@ -221,12 +221,21 @@ async function waitForMcpColibriIdle(config) {
   }
 }
 
+// Fixed intro text regardless of chunk size (chunkSize is 1 in practice —
+// see config.json) so every call shares the exact same prefix bytes as the
+// SYSTEM_PROMPT before it. Colibri persists its KV cache and matches on
+// prefix, so an identical prefix means only the per-posting delta at the end
+// needs a fresh prefill — a varying "Score these N postings" count would
+// break that match for no benefit (grammatically it always says "1 posting"
+// today regardless of wording, so this costs nothing).
+const USER_PROMPT_INTRO = "Score the following job posting(s):";
+
 function buildUserPrompt(chunk) {
   const items = chunk.map((p, i) => {
     const excerpt = (p.bodyText || "").substring(0, 800);
     return `${i + 1}. [id: "${p.id}"] ${p.company} — ${p.title}\n   Location: ${p.location || "N/A"} | Salary: ${p.salary || "N/A"}\n   ${excerpt}`;
   });
-  return `Score these ${chunk.length} job postings:\n\n${items.join("\n\n")}`;
+  return `${USER_PROMPT_INTRO}\n\n${items.join("\n\n")}`;
 }
 
 function parseRankingResponse(content, expectedIds) {
