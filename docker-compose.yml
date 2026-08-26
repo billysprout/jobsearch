@@ -185,6 +185,16 @@ services:
     cpus: "0.5"
     pids_limit: 32
     depends_on: [egress]
+    # Loopback-only publish of /health (GET, read-only job-count status, no
+    # auth) so the host-side jobscrape pipeline can check jobs_running before
+    # firing its own colibri calls — colibri serializes requests, so this and
+    # an in-conversation ask_colibri call landing at once would otherwise
+    # silently queue behind each other. Same trust tier as the frontend's
+    # existing 127.0.0.1-only gateway publish: reachable only from this
+    # Windows host, never LAN. Does not expose ask_colibri/check_colibri
+    # (those stay MCP-SSE-only on the internal network) — only /health.
+    ports:
+      - "127.0.0.1:${MCP_COLIBRI_HEALTH_PORT:-8090}:3000"
 
   # ---------------------------------------------------------- frontend ------
   # Loopback port publisher for the gateway (published ports don't function on

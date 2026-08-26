@@ -4,7 +4,8 @@
     "model": "glm-5.2-colibri",
     "timeoutMs": 900000,
     "chunkSize": 1,
-    "heuristicSkipThreshold": 70
+    "heuristicSkipThreshold": 70,
+    "mcpHealthUrl": "http://127.0.0.1:8090/health"
   },
   "workspaceVolume": "openclaw-sandbox_openclaw-workspace",
   "workspacePath": "/home/node/.openclaw/workspace/jobs",

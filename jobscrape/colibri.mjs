@@ -72,6 +72,8 @@ export async function rankPostings(config, postings, onChunkRanked) {
     const chunk = postings.slice(i, i + chunkSize);
     const userPrompt = buildUserPrompt(chunk);
 
+    await waitForMcpColibriIdle(config);
+
     try {
       console.error(`[colibri] chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(postings.length / chunkSize)}: ${chunk.length} postings, calling ${model}...`, `[t0=${Date.now()}]`);
 
@@ -179,6 +181,45 @@ export function heuristicRankings(postings, trackKeywords) {
 }
 
 // --- Internal ---
+
+// Best-effort coordination with the in-sandbox `ask_colibri` MCP tool
+// (mcp-colibri/), which hits this same colibri process from inside the
+// gateway container. Colibri serializes requests (disk-streamed experts,
+// one at a time) — if this host-side batch run and an agent's ask_colibri
+// call land at the same time, one silently queues behind the other with no
+// indication why. mcp-colibri's own /health reports jobs_running; it's
+// published to 127.0.0.1 (loopback only, read-only status, no auth) so this
+// host-side script can check it. Fails open: if the health URL is
+// unreachable (feature not deployed, container down, etc.) this is a no-op
+// after one quick attempt — never blocks a run on infrastructure that isn't
+// there. Not a lock, just politeness: waits briefly, then proceeds anyway.
+async function waitForMcpColibriIdle(config) {
+  const healthUrl = config.colibri?.mcpHealthUrl;
+  if (!healthUrl) return;
+
+  const maxAttempts = 3;
+  const pollDelayMs = 5000;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let health;
+    try {
+      const res = await fetch(healthUrl, { signal: AbortSignal.timeout(2000) });
+      if (!res.ok) return; // unreachable/misconfigured — don't block on it
+      health = await res.json();
+    } catch {
+      return; // mcp-colibri not reachable from the host — nothing to coordinate with
+    }
+
+    if (!health.jobs_running) return; // idle, go ahead
+
+    if (attempt < maxAttempts) {
+      console.error(`[colibri] mcp-colibri reports ${health.jobs_running} job(s) running via ask_colibri — waiting ${pollDelayMs / 1000}s before firing (attempt ${attempt}/${maxAttempts})`);
+      await new Promise(r => setTimeout(r, pollDelayMs));
+    } else {
+      console.error(`[colibri] mcp-colibri still busy after ${maxAttempts} checks — proceeding anyway (best-effort only, not a hard lock)`);
+    }
+  }
+}
 
 function buildUserPrompt(chunk) {
   const items = chunk.map((p, i) => {
