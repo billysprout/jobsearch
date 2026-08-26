@@ -20,7 +20,12 @@ if (-not (Test-Path $LogDir)) {
 # default; raise it if colibri throughput improves or --no-colibri is used.
 $Action = New-ScheduledTaskAction -Execute $NodePath -Argument "`"$ScriptPath`" --once --limit 10" -WorkingDirectory $PSScriptRoot
 $Trigger = New-ScheduledTaskTrigger -Daily -At "07:00"
-$Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd -ExecutionTimeLimit ([TimeSpan]::FromHours(3))
+# 6h matches the repo's other long-running-local-model budget (egress/squid.conf's
+# client_lifetime). Was 3h; scrape.mjs now streams each ranked chunk to the
+# digest as it completes (see its header comment) instead of writing once at
+# the end, so a timeout this generous no longer means losing a whole run's
+# worth of ranking if colibri is running slow (disk-tier offload, no GPU).
+$Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd -ExecutionTimeLimit ([TimeSpan]::FromHours(6))
 
 # Remove existing task if it exists
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
