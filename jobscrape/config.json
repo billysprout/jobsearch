@@ -3,7 +3,8 @@
     "baseUrl": "http://localhost:8000/v1",
     "model": "glm-5.2-colibri",
     "timeoutMs": 900000,
-    "chunkSize": 1
+    "chunkSize": 1,
+    "heuristicSkipThreshold": 70
   },
   "workspaceVolume": "openclaw-sandbox_openclaw-workspace",
   "workspacePath": "/home/node/.openclaw/workspace/jobs",

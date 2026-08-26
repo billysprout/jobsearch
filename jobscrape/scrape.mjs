@@ -12,36 +12,52 @@
 // Pipeline (see also README / SECURITY-REVIEW.md discussion in the parent repo):
 //   1. fetch all enabled sources
 //   2. keyword pre-filter (word-boundary matching, see keywords.mjs)
-//   3. drop postings already in state/seen.json (dedupe happens AFTER the
-//      filter now — a posting that never matched any track is never marked
-//      seen, so improving the keyword list later can still catch it; only
-//      postings that are genuinely about to be shown get burned from future
+//   3. drop postings already in state/seen.json or already queued in
+//      state/pending-colibri.json (dedupe happens AFTER the filter now — a
+//      posting that never matched any track is never marked seen, so
+//      improving the keyword list later can still catch it; only postings
+//      that are genuinely about to be shown get burned from future
 //      consideration)
 //   4. sort candidates so curated ATS sources (greenhouse/lever — companies
 //      we deliberately chose to track) rank ahead of generic job boards
 //      before applying --limit, so the cap doesn't get exhausted by noisy
-//      high-volume sources before it ever reaches the curated ones
-//   5. rank via colibri (or heuristic fallback)
-//   6. mark the ranked set (only) as seen; save state
-//   7. merge into today's accumulated digest (state/digest-<date>.json) so a
-//      second run on the same day supplements rather than silently
-//      overwrites the first run's results
-//   8. render + write to the workspace volume
+//      high-volume sources before it ever reaches the curated ones. Anything
+//      still sitting in the pending-colibri queue from a prior offline run
+//      goes first, ahead of newly-fetched candidates.
+//   5. rank via colibri and, for every chunk as soon as it's ranked (NOT
+//      batched to the end — colibri-backed runs can take hours and the
+//      scheduled task hard-kills on timeout, see register-task.ps1):
+//        a. on success: mark that chunk's source postings seen, drop them
+//           from the pending-colibri queue, and merge into today's
+//           accumulated digest (state/digest-<date>.json) so a second run
+//           the same day supplements rather than silently overwrites the
+//           first run's results, and so a killed run leaves behind
+//           everything ranked up to that point; render + write the digest
+//           to the workspace volume
+//        b. on failure (colibri offline/erroring): do NOT mark seen and do
+//           NOT heuristic-score it into the digest — add the posting to
+//           state/pending-colibri.json instead, so the next run retries it
+//           for real (see colibri.mjs). --no-colibri and the
+//           heuristicSkipThreshold pre-gate are unaffected: those are
+//           deliberate heuristic scoring, not an outage, and mark seen as
+//           usual.
+//   6. optional cover-letter drafting (--drafts), on top of the
+//      already-published digest
 //
-// --dry-run skips steps 6-8 entirely (no state.json write, no digest-state
-// write, no volume write) — it's now actually side-effect-free, unlike the
-// previous version which mutated seen.json even in dry-run mode.
+// --dry-run skips all state/volume writes entirely (no seen.json write, no
+// digest-state write, no volume write, no drafting) — side-effect-free.
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
-import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 import { fetchAll } from "./sources.mjs";
 import { rankPostings, heuristicRankings } from "./colibri.mjs";
-import { firstTrackMatch } from "./keywords.mjs";
+import { firstTrackMatch, bestTrackScore } from "./keywords.mjs";
+import { draftTopN } from "./draft.mjs";
+import { writeFilesToVolume } from "./volume-writer.mjs";
 
 // --- CLI ---
 const args = process.argv.slice(2);
@@ -50,9 +66,16 @@ const DRY_RUN = args.includes("--dry-run");
 const NO_COLIBRI = args.includes("--no-colibri");
 const limitIdx = args.indexOf("--limit");
 const LIMIT = limitIdx !== -1 ? Number(args[limitIdx + 1]) || 40 : 40;
+// --drafts [N]: opt-in cover-letter drafting for the top N postings by score
+// (default 3 if the flag is present with no number). Needs colibri and
+// jobscrape/profile.md — see draft.mjs. Off by default: it's extra colibri
+// calls on top of ranking, and colibri throughput is already the reason
+// --limit is capped at 10 in production (see register-task.ps1).
+const draftsIdx = args.indexOf("--drafts");
+const DRAFTS = draftsIdx !== -1 ? (Number(args[draftsIdx + 1]) || 3) : 0;
 
 if (!ONCE) {
-  console.error("Usage: node scrape.mjs --once [--dry-run] [--limit N] [--no-colibri]");
+  console.error("Usage: node scrape.mjs --once [--dry-run] [--limit N] [--no-colibri] [--drafts [N]]");
   process.exit(1);
 }
 
@@ -63,7 +86,7 @@ const STAGING_DIR = resolve(__dirname, "staging");
 
 // Curated ATS sources (companies we deliberately picked) rank ahead of
 // generic job boards when the --limit cap is applied.
-const SOURCE_PRIORITY = { greenhouse: 0, lever: 0, remotive: 1, hn: 1, remoteok: 2, wwr: 2 };
+const SOURCE_PRIORITY = { greenhouse: 0, lever: 0, workable: 0, ashby: 0, remotive: 1, hn: 1, remoteok: 2, wwr: 2 };
 function sourcePriority(source) {
   return SOURCE_PRIORITY[source] ?? 3;
 }
@@ -83,6 +106,29 @@ console.error(`[state] ${seen.size} previously seen postings`);
 function saveSeen() {
   mkdirSync(STATE_DIR, { recursive: true });
   writeFileSync(STATE_FILE, JSON.stringify([...seen], null, 0));
+}
+
+// --- Pending-colibri queue: postings that matched a track but couldn't be
+// ranked because colibri was offline. They are deliberately NOT marked seen
+// and NOT written to the digest with a heuristic score — they're carried
+// forward run to run (oldest first) until colibri is back to actually score
+// them, so a colibri outage delays a posting's appearance rather than
+// permanently degrading it to a keyword guess.
+const PENDING_FILE = join(STATE_DIR, "pending-colibri.json");
+
+/** @type {Map<string, object>} keyed by `${source}:${id}` */
+let pendingQueue;
+if (existsSync(PENDING_FILE)) {
+  const list = JSON.parse(readFileSync(PENDING_FILE, "utf8"));
+  pendingQueue = new Map(list.map(p => [`${p.source}:${p.id}`, p]));
+} else {
+  pendingQueue = new Map();
+}
+console.error(`[state] ${pendingQueue.size} posting(s) pending colibri from a prior offline run`);
+
+function savePendingQueue() {
+  mkdirSync(STATE_DIR, { recursive: true });
+  writeFileSync(PENDING_FILE, JSON.stringify([...pendingQueue.values()], null, 0));
 }
 
 // --- Today's accumulated digest state (fixes same-day overwrite) ---
@@ -199,6 +245,35 @@ function renderDigest(dateStr, ranked, colibriOnline) {
   return md;
 }
 
+// Compact machine-readable summary alongside the markdown digest — top N per
+// track, written to digest/<stamp>-summary.json. Purpose-built for
+// digest-notify.mjs (WhatsApp push) so it doesn't have to parse the markdown
+// table; kept separate from state/digest-<date>.json, which is jobscrape's
+// own accumulation state and isn't written to the workspace volume at all.
+function renderSummaryJson(ranked, topNPerTrack = 5) {
+  const byTrack = {};
+  for (const r of ranked) {
+    if (r.track === "none") continue;
+    (byTrack[r.track] ||= []).push(r);
+  }
+  const out = [];
+  for (const items of Object.values(byTrack)) {
+    items.sort((a, b) => b.score - a.score);
+    for (const r of items.slice(0, topNPerTrack)) {
+      out.push({
+        id: r.id,
+        track: r.track,
+        score: r.score,
+        company: r._posting.company,
+        title: r._posting.title,
+        url: r._posting.url,
+        one_line: r.one_line,
+      });
+    }
+  }
+  return out;
+}
+
 function renderCard(r) {
   const p = r._posting;
   return `# ${p.title}\n\n`
@@ -221,6 +296,13 @@ const AGENT_README = [
   "",
   "Tracks: Esports/Gaming Ops, IT/DevOps/Sysadmin, Producer/PM.",
   "",
+  "digest/<date>-summary.json is a compact top-N-per-track version of the same",
+  "date's digest, consumed by digest-notify.mjs for the WhatsApp push.",
+  "",
+  "postings/<id>-draft.md — a draft cover letter, only present when the scrape",
+  "was run with --drafts. Read it, edit it, send it yourself; nothing here is",
+  "submitted anywhere automatically.",
+  "",
   "Files are regenerated daily. Stale digests are safe to delete.",
 ].join("\n");
 
@@ -228,44 +310,28 @@ function esc(s) {
   return (s || "").replace(/\|/g, "\\|").replace(/\n/g, " ").substring(0, 60);
 }
 
-// --- Workspace writer (tar-pipe into docker volume) ---
-async function writeToVolume(digestMd, cards, stamp) {
-  const vol = config.workspaceVolume;
-  const target = config.workspacePath;
-
-  mkdirSync(STAGING_DIR, { recursive: true });
-  mkdirSync(join(STAGING_DIR, "digest"), { recursive: true });
-  mkdirSync(join(STAGING_DIR, "postings"), { recursive: true });
-
-  writeFileSync(join(STAGING_DIR, "README.md"), AGENT_README);
-  writeFileSync(join(STAGING_DIR, "digest", `${stamp}.md`), digestMd);
+// --- Workspace writer (tar-pipe into docker volume, see volume-writer.mjs) ---
+async function writeToVolume(digestMd, cards, stamp, summaryJson, drafts) {
+  const files = [
+    { relPath: "README.md", content: AGENT_README },
+    { relPath: `digest/${stamp}.md`, content: digestMd },
+    { relPath: `digest/${stamp}-summary.json`, content: JSON.stringify(summaryJson, null, 2) },
+  ];
   for (const card of cards) {
-    writeFileSync(join(STAGING_DIR, "postings", `${card.id}.md`), card.content);
+    files.push({ relPath: `postings/${card.id}.md`, content: card.content });
+  }
+  for (const draft of drafts) {
+    files.push({ relPath: `postings/${draft.id}-draft.md`, content: draft.content });
+    if (draft.pdfBuffer) {
+      files.push({ relPath: `postings/${draft.id}-draft.pdf`, content: draft.pdfBuffer });
+    }
   }
 
-  console.error(`[volume] staging ${cards.length + 2} files into ${vol}:${target}`);
-
-  return new Promise((resolvePromise, reject) => {
-    const tarArgs = ["-cf", "-", "-C", STAGING_DIR, "."];
-    const dockerArgs = [
-      "run", "--rm", "-i",
-      "-v", `${vol}:/w`,
-      "alpine", "sh", "-c", "mkdir -p /w/jobs && tar -xf - -C /w/jobs"
-    ];
-
-    console.error(`[volume] tar | docker ... alpine tar`);
-
-    const tarProc = execFile("tar", tarArgs, { stdio: ["pipe", "pipe", "pipe"] }, (err) => {
-      if (err) reject(new Error(`tar: ${err.message}`));
-    });
-    const dockerProc = execFile("docker", dockerArgs, { stdio: ["pipe", "pipe", "pipe"] }, (err) => {
-      if (err) reject(new Error(`docker: ${err.message}`));
-      else resolvePromise();
-    });
-
-    tarProc.stdout.pipe(dockerProc.stdin);
-    tarProc.stderr.on("data", d => console.error(`[tar] ${d}`));
-    dockerProc.stderr.on("data", d => console.error(`[docker] ${d}`));
+  await writeFilesToVolume({
+    volume: config.workspaceVolume,
+    targetPath: config.workspacePath,
+    stagingDir: STAGING_DIR,
+    files,
   });
 }
 
@@ -286,10 +352,12 @@ async function main() {
   // posting even pass the keyword filter at all?" — see jobscrape/state/last-run-matched.json
   writeSnapshot("matched", matched);
 
-  // 3. Drop already-seen (only matched postings ever touch `seen`)
+  // 3. Drop already-seen (only matched postings ever touch `seen`) and
+  // anything already sitting in the pending-colibri queue (it'll be
+  // re-included below without going through the source fetch again).
   console.error("[main] step 3/6: deduping against seen state...");
-  const freshMatched = matched.filter(p => !seen.has(`${p.source}:${p.id}`));
-  console.error(`[dedupe] ${freshMatched.length} new-and-relevant, ${matched.length - freshMatched.length} already seen`);
+  const freshMatched = matched.filter(p => !seen.has(`${p.source}:${p.id}`) && !pendingQueue.has(`${p.source}:${p.id}`));
+  console.error(`[dedupe] ${freshMatched.length} new-and-relevant, ${matched.length - freshMatched.length} already seen or pending`);
   // POST-seen-filter snapshot: the actual eligible pool this run drew
   // candidates from, before source-priority sorting and --limit capping.
   // Answers "why wasn't this scored" for anything NOT in this file despite
@@ -297,71 +365,177 @@ async function main() {
   // See jobscrape/state/last-run-eligible.json
   writeSnapshot("eligible", freshMatched);
 
-  if (!freshMatched.length) {
+  if (!freshMatched.length && !pendingQueue.size) {
     console.error("[main] nothing new to rank -- done");
     return;
   }
 
-  // 4. Sort by source priority (curated ATS first), then cap
+  // 4. Sort by source priority (curated ATS first), then cap. Pending
+  // postings (carried over from a prior colibri outage) go first — they're
+  // the oldest work in the queue and get first claim on this run's budget.
   console.error("[main] step 4/6: prioritizing + capping...");
   const sorted = [...freshMatched].sort((a, b) => sourcePriority(a.source) - sourcePriority(b.source));
-  const candidates = sorted.slice(0, LIMIT);
-  console.error(`[main] ${candidates.length} candidates after priority sort + cap (of ${freshMatched.length} eligible)`);
+  const combinedPool = [...pendingQueue.values(), ...sorted];
+  const candidates = combinedPool.slice(0, LIMIT);
+  console.error(`[main] ${candidates.length} candidates after priority sort + cap (${pendingQueue.size} pending + ${freshMatched.length} new-eligible)`);
 
-  // 5. Rank via colibri (or heuristic)
+  // 5. Rank via colibri (or heuristic), with a heuristic pre-gate for
+  // high-confidence matches. Colibri throughput is the binding constraint on
+  // --limit (see register-task.ps1), so postings the keyword scorer is
+  // already confident about skip the colibri call entirely, reserving that
+  // budget for genuinely ambiguous candidates.
+  //
+  // Streaming: a colibri-backed run can take hours and the Windows
+  // Scheduled Task that runs this hard-kills the process on timeout (see
+  // register-task.ps1's ExecutionTimeLimit). Rather than accumulating
+  // rankings in memory and writing the digest once at the very end, every
+  // ranked chunk is persisted (seen.json, state/digest-<date>.json) and
+  // published to the workspace volume as soon as it's ready — a kill at any
+  // point loses at most the one chunk in flight, not the whole run.
   console.error("[main] step 5/6: ranking...");
-  let rankings, colibriOnline;
+  const postingMap = new Map(candidates.map(p => [p.id, p]));
+  const stamp = todayStamp();
+  let allTodayRankings = DRY_RUN ? [] : loadTodayRankings(stamp);
+  let colibriOnlineSoFar = true;
+  let latestDigestMd = "";
+  let latestSummaryJson = [];
+  let rankings = [];
+
+  function attachPosting(list) {
+    for (const r of list) {
+      r._posting = postingMap.get(r.id) || { id: r.id, source: "?", company: "?", title: "?", location: "", salary: "", url: "", bodyText: "" };
+    }
+    return list;
+  }
+
+  // Marks `sourcePostings` seen, merges `newRankings` into today's
+  // accumulated state, re-renders, and writes to the workspace volume — so
+  // the on-disk digest always reflects everything ranked so far, not just
+  // what was ranked by the time the whole run finished. `sourcePostings` may
+  // be `[]` for a ranking that was already marked seen as part of an earlier
+  // chunk (see the missing-id fallback below).
+  async function persistAndPublish(newRankings, sourcePostings) {
+    if (DRY_RUN || !newRankings.length) return;
+    for (const p of sourcePostings) seen.add(`${p.source}:${p.id}`);
+    if (sourcePostings.length) saveSeen();
+
+    allTodayRankings.push(...newRankings);
+    saveTodayRankings(stamp, allTodayRankings);
+
+    latestDigestMd = renderDigest(stamp, allTodayRankings, colibriOnlineSoFar);
+    latestSummaryJson = renderSummaryJson(allTodayRankings);
+    const cards = newRankings.map(r => ({ id: r.id, content: renderCard(r) }));
+    await writeToVolume(latestDigestMd, cards, stamp, latestSummaryJson, []);
+    console.error(`[main] streamed ${newRankings.length} new ranking(s) to digest (${allTodayRankings.length} total today)`);
+  }
+
+  // Postings deferred to the pending-colibri queue this run (colibri
+  // offline/erroring) — excluded from the "colibri missed" fallback below,
+  // since those are genuinely retried next run, not a malformed-response fluke.
+  const deferredIds = new Set();
+
   if (NO_COLIBRI) {
-    rankings = heuristicRankings(candidates, config.tracks);
-    colibriOnline = false;
+    // Explicit opt-out, not an outage — score everything heuristically now,
+    // including anything that was sitting in the pending queue.
+    rankings = attachPosting(heuristicRankings(candidates, config.tracks));
+    colibriOnlineSoFar = false;
+    await persistAndPublish(rankings, candidates);
+    if (!DRY_RUN) {
+      for (const p of candidates) pendingQueue.delete(`${p.source}:${p.id}`);
+      savePendingQueue();
+    }
   } else {
-    const result = await rankPostings(config, candidates);
-    rankings = result.rankings;
-    colibriOnline = result.colibriOnline;
+    const skipThreshold = config.colibri.heuristicSkipThreshold;
+    let toRank = candidates;
+    let preGated = [];
+
+    if (typeof skipThreshold === "number") {
+      const scored = candidates.map(p => ({
+        posting: p,
+        ...bestTrackScore(`${p.title} ${p.company} ${p.bodyText}`.toLowerCase(), config.tracks),
+      }));
+      preGated = scored.filter(s => s.score >= skipThreshold).map(s => s.posting);
+      toRank = scored.filter(s => s.score < skipThreshold).map(s => s.posting);
+      if (preGated.length) {
+        console.error(`[main] ${preGated.length} candidate(s) skip colibri (heuristic score >= ${skipThreshold}), ${toRank.length} sent to colibri`);
+      }
+    }
+
+    if (preGated.length) {
+      const preGatedRankings = attachPosting(heuristicRankings(preGated, config.tracks).map(r => ({
+        ...r,
+        fit_notes: `${r.fit_notes} — skipped colibri, high-confidence keyword match (>= ${skipThreshold})`,
+      })));
+      rankings.push(...preGatedRankings);
+      await persistAndPublish(preGatedRankings, preGated);
+      if (!DRY_RUN) {
+        for (const p of preGated) pendingQueue.delete(`${p.source}:${p.id}`);
+        savePendingQueue();
+      }
+    }
+
+    await rankPostings(config, toRank, async (parsed, chunk, { colibriOk }) => {
+      if (!colibriOk) {
+        // Deferred, not heuristic-scored — doesn't touch the digest, so it
+        // must not flip the "Ranked by colibri" banner for entries that DID
+        // get scored by colibri in this same run (see colibriOnlineSoFar's
+        // use in persistAndPublish/renderDigest below).
+        for (const p of chunk) deferredIds.add(p.id);
+        if (!DRY_RUN) {
+          for (const p of chunk) pendingQueue.set(`${p.source}:${p.id}`, p);
+          savePendingQueue();
+        }
+        console.error(`[main] colibri offline — queued ${chunk.length} posting(s) for retry next run (pending: ${pendingQueue.size})`);
+        return;
+      }
+      // chunkSize is always 1 (config.colibri.chunkSize), so the single
+      // posting's real id is unambiguous — trust it over whatever colibri
+      // echoed back in its JSON, which can mangle it (observed in
+      // production: "gh-riotgames-7312899" came back as "gh-7312899",
+      // which would otherwise silently orphan _posting via attachPosting's
+      // placeholder fallback and lose the real posting's data).
+      if (chunk.length === 1) {
+        for (const r of parsed) r.id = chunk[0].id;
+      }
+      const attached = attachPosting(parsed);
+      rankings.push(...attached);
+      await persistAndPublish(attached, chunk);
+      if (!DRY_RUN) {
+        for (const p of chunk) pendingQueue.delete(`${p.source}:${p.id}`);
+        savePendingQueue();
+      }
+    });
 
     if (rankings.length < candidates.length) {
       const rankedIds = new Set(rankings.map(r => r.id));
-      const missing = candidates.filter(p => !rankedIds.has(p.id));
+      const missing = candidates.filter(p => !rankedIds.has(p.id) && !deferredIds.has(p.id));
       if (missing.length) {
-        console.error(`[main] colibri missed ${missing.length}, filling with heuristic`);
-        rankings.push(...heuristicRankings(missing, config.tracks));
+        console.error(`[main] colibri missed ${missing.length} (malformed response, not an outage), filling with heuristic`);
+        const filled = attachPosting(heuristicRankings(missing, config.tracks));
+        rankings.push(...filled);
+        // Already marked seen as part of their chunk above — this only adds
+        // the fallback ranking to the digest, not another seen.add.
+        await persistAndPublish(filled, []);
       }
     }
   }
 
-  const postingMap = new Map(candidates.map(p => [p.id, p]));
-  for (const r of rankings) {
-    r._posting = postingMap.get(r.id) || { id: r.id, source: "?", company: "?", title: "?", location: "", salary: "", url: "", bodyText: "" };
-  }
+  if (!DRY_RUN) pruneOldDigestState();
 
-  // Only NOW mark these as seen — postings that got cut by --limit stay
-  // eligible for the next run instead of being silently lost forever.
-  if (!DRY_RUN) {
-    for (const p of candidates) seen.add(`${p.source}:${p.id}`);
-    saveSeen();
-  }
-
-  // 6. Merge with today's accumulated rankings, render, write
-  console.error("[main] step 6/6: rendering + writing digest...");
-  const stamp = todayStamp();
-
-  let allTodayRankings = rankings;
-  if (!DRY_RUN) {
-    const priorToday = loadTodayRankings(stamp);
-    allTodayRankings = [...priorToday, ...rankings];
-    saveTodayRankings(stamp, allTodayRankings);
-    pruneOldDigestState();
-  }
-
-  const digestMd = renderDigest(stamp, allTodayRankings, colibriOnline);
-  const cards = rankings.map(r => ({ id: r.id, content: renderCard(r) }));
-
+  // 6. Drafting (opt-in, unaffected by streaming) + final summary. The
+  // digest itself is already fully up to date on the volume via
+  // persistAndPublish above — this step only adds cover-letter drafts, if
+  // requested, on top of what's already written.
+  console.error("[main] step 6/6: drafting...");
   if (DRY_RUN) {
-    console.log(digestMd);
-    console.error("[main] DRY RUN -- no state mutation, no volume write");
-  } else {
-    await writeToVolume(digestMd, cards, stamp);
-    console.error(`[main] written to workspace volume (${allTodayRankings.length} total ranked today, ${rankings.length} new this run)`);
+    console.log(renderDigest(stamp, rankings, colibriOnlineSoFar));
+    console.error("[main] DRY RUN -- no state mutation, no volume write, no drafting");
+  } else if (DRAFTS > 0 && !NO_COLIBRI) {
+    const drafts = await draftTopN(config, rankings, DRAFTS);
+    if (drafts.length) {
+      await writeToVolume(latestDigestMd, [], stamp, latestSummaryJson, drafts);
+      console.error(`[main] wrote ${drafts.length} draft(s)`);
+    }
   }
 
   console.error(`[main] === done: ${rankings.length} ranked this run, ${candidates.length} candidates, ${freshMatched.length} eligible, ${allPostings.length} total fetched ===`);

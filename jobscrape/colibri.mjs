@@ -2,7 +2,13 @@
 // Uses built-in fetch with AbortController timeout.
 // Note: colibri with stream=false buffers the full response — socket is idle during
 // generation, so undici's headersTimeout (default 300s) must not be hit.
-// Defensive: strips fences, finds first JSON array, falls back to heuristic scores.
+// Defensive: strips fences, finds first JSON array. A chunk that errors (offline,
+// timeout, bad HTTP response) is NOT heuristic-scored here — it's reported back via
+// colibriOk:false with no ranking, and the caller (scrape.mjs) defers it to the
+// pending-colibri queue for retry once colibri is back, instead of permanently
+// burning it into the digest with a degraded score. heuristicRankings() below is
+// still used for explicit --no-colibri runs and the heuristicSkipThreshold pre-gate
+// (config.colibri.heuristicSkipThreshold) — both deliberate, not offline fallback.
 
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -33,15 +39,34 @@ Return ONLY a JSON array of these objects, one per posting, in the same order as
  * Rank a batch of postings via colibri.
  * @param {import('./config.json')} config
  * @param {Array<{source: string, id: string, url: string, company: string, title: string, location: string, salary: string, bodyText: string}>} postings
+ * @param {(parsed: Ranking[], chunk: Array<object>, info: {colibriOk: boolean}) => (void|Promise<void>)} [onChunkRanked]
+ *   Optional callback fired after each chunk resolves — lets the caller
+ *   persist/publish incrementally instead of waiting for the whole batch,
+ *   since a single chunk can itself take minutes and the batch as a whole
+ *   can run for hours. On success, `parsed` holds that chunk's rankings and
+ *   `colibriOk` is true. On failure (offline, timeout, bad response),
+ *   `parsed` is `[]` and `colibriOk` is false — no ranking was produced, and
+ *   the caller is expected to defer `chunk` for retry rather than score it
+ *   heuristically. Failures in the callback are logged and swallowed — a
+ *   digest-write hiccup must never abort ranking.
  * @returns {Promise<{rankings: Ranking[], colibriOnline: boolean}>}
  */
-export async function rankPostings(config, postings) {
+export async function rankPostings(config, postings, onChunkRanked) {
   if (!postings.length) return { rankings: [], colibriOnline: true };
 
   const { baseUrl, model, timeoutMs, chunkSize } = config.colibri;
   const endpoint = `${baseUrl}/chat/completions`;
   const allRankings = [];
   let colibriOnline = true;
+
+  async function publishChunk(parsed, chunk, colibriOk) {
+    if (!onChunkRanked) return;
+    try {
+      await onChunkRanked(parsed, chunk, { colibriOk });
+    } catch (e) {
+      console.error(`[colibri] onChunkRanked callback failed (non-fatal): ${e.message}`);
+    }
+  }
 
   for (let i = 0; i < postings.length; i += chunkSize) {
     const chunk = postings.slice(i, i + chunkSize);
@@ -114,12 +139,13 @@ export async function rankPostings(config, postings) {
       const parsed = parseRankingResponse(content, chunk.map(p => p.id));
       allRankings.push(...parsed);
       console.error(`[colibri] parsed ${parsed.length}/${chunk.length} rankings from chunk`);
+      await publishChunk(parsed, chunk, true);
 
     } catch (err) {
-      console.error(`[colibri] ERROR: ${err.message}`);
+      console.error(`[colibri] ERROR: ${err.message} — deferring chunk for retry (no heuristic fallback)`);
       colibriOnline = false;
-      // Fall back to heuristic for this chunk
-      allRankings.push(...heuristicRankings(chunk));
+      // No ranking produced — caller defers this chunk to the pending queue.
+      await publishChunk([], chunk, false);
     }
   }
 
