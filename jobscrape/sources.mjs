@@ -36,6 +36,16 @@ export async function fetchAll(config) {
       try { results.push(...await fetchLever(slug, meta.label)); } catch (e) { console.error(`[sources] lever/${slug} error:`, e.message); }
     }
   }
+  if (src.workable?.enabled) {
+    for (const [slug, meta] of Object.entries(config.ats.workable)) {
+      try { results.push(...await fetchWorkable(slug, meta.label)); } catch (e) { console.error(`[sources] workable/${slug} error:`, e.message); }
+    }
+  }
+  if (src.ashby?.enabled) {
+    for (const [slug, meta] of Object.entries(config.ats.ashby)) {
+      try { results.push(...await fetchAshby(slug, meta.label)); } catch (e) { console.error(`[sources] ashby/${slug} error:`, e.message); }
+    }
+  }
 
   console.error(`[sources] total fetched: ${results.length}`);
   return results;
@@ -206,6 +216,56 @@ async function fetchLever(slug, label) {
       salary: p.categories?.compensation || "",
       bodyText: [p.descriptionPlain || p.description || "", p.lists?.additional || ""].filter(Boolean).join(" "),
       postedAt: p.createdAt,
+    }));
+}
+
+// --- Workable ---
+// Public "widget" API — same one job-board aggregators use, no API key.
+// Slug = the account name in apply.workable.com/{slug}/. Verify a slug works:
+// curl https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true
+async function fetchWorkable(slug, label) {
+  const url = `https://apply.workable.com/api/v1/widget/accounts/${slug}?details=true`;
+  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const jobs = data.jobs || [];
+  return jobs
+    .filter(j => j && j.shortcode)
+    .map(j => ({
+      source: "workable",
+      id: `workable-${slug}-${j.shortcode}`,
+      url: j.application_url || j.url || j.shortlink || "",
+      company: label,
+      title: j.title || "",
+      location: [j.city, j.state, j.country].filter(Boolean).join(", "),
+      salary: "",
+      bodyText: stripHtml(j.description || ""),
+      postedAt: j.published_on || j.created_at,
+    }));
+}
+
+// --- Ashby ---
+// Public Job Board API (documented: developers.ashbyhq.com/docs/public-job-posting-api).
+// Slug = the job board name in jobs.ashbyhq.com/{slug}. Verify a slug works:
+// curl https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true
+async function fetchAshby(slug, label) {
+  const url = `https://api.ashbyhq.com/posting-api/job-board/${slug}?includeCompensation=true`;
+  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const jobs = data.jobs || [];
+  return jobs
+    .filter(j => j && j.id && j.isListed !== false)
+    .map(j => ({
+      source: "ashby",
+      id: `ashby-${slug}-${j.id}`,
+      url: j.jobUrl || j.applyUrl || "",
+      company: label,
+      title: j.title || "",
+      location: j.location || "",
+      salary: "",
+      bodyText: stripHtml(j.descriptionPlain || j.descriptionHtml || ""),
+      postedAt: j.publishedAt,
     }));
 }
 

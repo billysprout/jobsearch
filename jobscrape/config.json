@@ -58,14 +58,37 @@
     "wwr": { "enabled": false },
     "hn": { "enabled": true },
     "greenhouse": { "enabled": true },
-    "lever": { "enabled": false }
+    "lever": { "enabled": false },
+    "workable": { "enabled": true },
+    "ashby": { "enabled": true }
   },
   "ats": {
     "greenhouse": {
       "riotgames": { "label": "Riot Games" },
       "epicgames": { "label": "Epic Games" },
       "roblox": { "label": "Roblox" },
-      "discord": { "label": "Discord" }
+      "discord": { "label": "Discord" },
+      "bungie": { "label": "Bungie" },
+      "twitch": { "label": "Twitch" },
+      "scopely": { "label": "Scopely" },
+      "rockstargames": { "label": "Rockstar Games" },
+      "krafton": { "label": "Krafton" },
+      "gitlab": { "label": "GitLab" },
+      "cloudflare": { "label": "Cloudflare" },
+      "datadog": { "label": "Datadog" },
+      "elastic": { "label": "Elastic" },
+      "mongodb": { "label": "MongoDB" },
+      "pagerduty": { "label": "PagerDuty" },
+      "newrelic": { "label": "New Relic" },
+      "launchdarkly": { "label": "LaunchDarkly" },
+      "temporaltechnologies": { "label": "Temporal" },
+      "figma": { "label": "Figma" },
+      "airtable": { "label": "Airtable" },
+      "brex": { "label": "Brex" },
+      "mercury": { "label": "Mercury" },
+      "gusto": { "label": "Gusto" },
+      "asana": { "label": "Asana" },
+      "webflow": { "label": "Webflow" }
     },
     "lever": {
       "eslgaming": { "label": "ESL" },
@@ -73,6 +96,13 @@
       "teamliquid": { "label": "Team Liquid" },
       "netflix": { "label": "Netflix" },
       "vercel": { "label": "Vercel" }
+    },
+    "workable": {
+      "cloud9": { "label": "Cloud9" }
+    },
+    "ashby": {
+      "ramp": { "label": "Ramp" },
+      "vanta": { "label": "Vanta" }
     }
   },
   "wwr": {
