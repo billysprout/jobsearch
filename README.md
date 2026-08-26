@@ -350,6 +350,19 @@ Deterministic regardless of transport. Config: `models.providers.ollama-local` �
 below. That was a completely separate, global setting that ate most of the budget I'd just
 raised.
 
+**Update 2026-08-24: bumped to 65536.** Even after the `reserveTokensFloor` fix below, the
+effective reserve for this model was still clamped to 16,384 (see that section's update) —
+leaving only ~16K tokens of real prompt headroom on the 32K window, and an ordinary WhatsApp
+thread overflowed it again (16,929 estimated tokens vs. a 16,384 budget — a 545-token miss,
+compaction already at its floor with nothing left to cut). VRAM headroom was never the
+constraint (only ~1.8GB of 8GB used at 32K context), so raised the actual window instead of
+continuing to fight the reserve math: new tag `gemma4-e2b-64k` (`ollama create gemma4-e2b-64k
+-f Modelfile` — same `FROM gemma4:e2b`, `PARAMETER num_ctx 65536`), `contextWindow: 65536` in
+`openclaw.json`, fallback chain and alias updated to match, old `gemma4-e2b-32k` entries
+removed rather than left stale. Confirmed via `ollama ps`: loads 100% on GPU at the new
+context size, same ~1.8GB. Gateway picked up the config change via its existing hot-reload —
+no restart needed.
+
 ## The real context-overflow bug: `reserveTokensFloor`
 
 A live WhatsApp session hit `Context overflow: prompt too large for the model (precheck)`
