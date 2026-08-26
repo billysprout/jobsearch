@@ -5,10 +5,11 @@ Read `SECURITY-REVIEW.md` for the full adversarial threat model, verification
 results, and residual-risk register.
 
 **Status: LIVE** (since 2026-08-22) — strict profile active (no exec/process tools
-inside the sandbox), dedicated z.ai coding-plan key, WhatsApp channel linked, local
-model fallback chain (colibri + Gemma 4 via Ollama) wired in for when z.ai is
-quota-exhausted (current z.ai key: exhausted, resets 2026-08-29 — the fallback
-chain is what's actually serving traffic right now).
+inside the sandbox), dedicated z.ai coding-plan key, WhatsApp + Telegram channels
+both linked, local model fallback chain (colibri + Gemma 4 via Ollama) wired in for
+when z.ai is quota-exhausted (current z.ai key: exhausted, resets 2026-08-29 — the
+fallback chain is what's actually serving traffic right now, confirmed delivering
+on both channels).
 
 ## Start / stop
 
@@ -84,6 +85,69 @@ key is a global allowlist, not an "also trust this one," and setting it to `["wh
 silently drops all 8 bundled plugins (browser, canvas, device-pair, file-transfer,
 memory-core, ollama, phone-control, talk-voice) on restart. Left unset; see
 SECURITY-REVIEW.md §4 R13.
+
+**2026-08-24: a Meta WhatsApp Business Cloud API migration was scoped and started (dedicated
+bot number, custom channel plugin, Tailscale Funnel ingress) then abandoned before any
+credential existed — the fresh Business Portfolio got an automatic Meta anti-abuse
+restriction the same day it was created, blocking app-claiming entirely. WhatsApp above is
+staying exactly as it is; see "Telegram channel" below for the replacement plan instead.**
+
+## Telegram channel
+
+**Status: LIVE** (linked 2026-08-24). Second channel, added alongside WhatsApp — WhatsApp
+above stays linked and untouched. Telegram was picked after the Meta Cloud API route (see
+note above) hit a same-day account restriction with no clean appeal path. Unlike Meta,
+OpenClaw has a **native, bundled Telegram channel plugin** — no custom plugin code
+needed — and the bot token came from @BotFather in about a minute, no business
+verification.
+
+**No ingress needed**: this channel runs OpenClaw's default **long polling** transport
+(grammY runner) — no public URL, no webhook, no Tailscale Funnel mapping, nothing inbound
+at all. The gateway reaches out to `api.telegram.org` and pulls messages, same outbound-only
+shape as the WhatsApp/Baileys leg.
+
+```bash
+docker compose run --rm cli channels status --probe            # linked/connected/health check
+docker compose run --rm cli gateway call channels.start --params '{"channel":"telegram"}'
+  # manual (re-)start — see the gotcha below for why this is sometimes needed
+```
+
+**How it was set up**: bot created via @BotFather (`/newbot`), bot username
+`@billyclaw3_bot`. Token stored as `TELEGRAM_BOT_TOKEN` in `.env` — picked up automatically
+by the plugin (no `botToken` needed in `openclaw.json`, the docs confirm the env var is
+honored for the default account). Config: `channels.telegram` in `openclaw.json` —
+`dmPolicy: allowlist`, single numeric `allowFrom` (the operator's Telegram user ID, found
+via `curl https://api.telegram.org/bot<token>/getUpdates` after sending the bot one
+message — `@username` is *not* accepted, only the numeric ID), `groupPolicy: disabled`.
+Note: unlike the WhatsApp config, `pluginHooks` is **not** a valid field on
+`channels.telegram` — including it fails config validation outright (`invalid config: must
+not have additional properties: "pluginHooks"`), it's WhatsApp-schema-specific.
+
+**Egress gotcha**: `api.telegram.org` was added to `egress/extra-domains.txt`, but editing
+that file alone isn't enough — squid caches the ACL file contents at startup and doesn't
+watch it for changes. A running egress container needs an explicit reload:
+```bash
+docker compose exec egress squid -k reconfigure
+```
+Without this, the channel reports `probe failed, error:fetch failed | Proxy response (403)
+!== 200 when HTTP Tunneling` even though the domain is correctly listed in the file.
+
+**Restart-loop breaker gotcha**: iterating on the config above (each fix required
+`docker compose up -d --force-recreate openclaw-gateway`) tripped OpenClaw's own
+restart-loop breaker ("6 unclean boot(s) within 300000ms") — which then suppressed
+autostart for **every** channel, including WhatsApp, not just the one being configured.
+Gateway itself was fine (`Gateway reachable`); this only blocks channel autostart. Fixed
+per-channel without a further restart:
+```bash
+docker compose run --rm cli gateway call channels.start --params '{"channel":"whatsapp"}'
+docker compose run --rm cli gateway call channels.start --params '{"channel":"telegram"}'
+```
+Windows/PowerShell note: the `--params '{"channel":"..."}'` JSON argument gets mangled by
+PowerShell's quoting before it reaches Docker (`SyntaxError: Expected property name or '}'
+in JSON`) — this one needs the Bash tool/Git Bash, not PowerShell.
+
+**Egress**: `api.telegram.org` is a permanent allowlist entry — see SECURITY-REVIEW.md
+§4 R16–R18 for the residual-risk writeup.
 
 ## Job search pipeline (`jobscrape/`)
 

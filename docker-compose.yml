@@ -200,6 +200,12 @@ services:
   # Loopback port publisher for the gateway (published ports don't function on
   # internal networks — this forwarder is the documented R6 fallback in
   # SECURITY-REVIEW.md). Inbound-only relay: host 127.0.0.1 -> gateway:18789.
+  #
+  # A Meta WhatsApp Cloud API migration briefly planned routing a webhook
+  # through this publish via Tailscale Funnel; abandoned 2026-08-24 before
+  # going live (see SECURITY-REVIEW.md §4 R15) — no inbound wiring needed
+  # here. The Telegram channel added the same day (§4 R16-R18) uses long
+  # polling (outbound-only), so it doesn't touch this service either.
   frontend:
     build: ./frontend
     image: openclaw-frontend:local
