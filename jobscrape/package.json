@@ -1,0 +1,9 @@
+{
+  "name": "jobscrape",
+  "private": true,
+  "type": "module",
+  "description": "Host-side job scraping pipeline for the OpenClaw sandbox.",
+  "dependencies": {
+    "pdfkit": "^0.15.0"
+  }
+}
