@@ -158,8 +158,27 @@ tar-pipe through a one-off alpine container. See `jobscrape/README.md` for full 
 docs; summary here.
 
 **Sources**: RemoteOK, Remotive, HN "Who is Hiring", Greenhouse ATS (Riot Games, Epic
-Games, Roblox, Discord). Disabled: WWR (Cloudflare 403), Lever (v0 API deprecated),
-Cloud9 (see gotcha below).
+Games, Roblox, Discord, Bungie), Workable ATS (Cloud9 — the real esports Cloud9,
+added 2026-08-24 once the correct ATS was confirmed, see gotcha below), Ashby ATS
+(Ramp, Vanta). Disabled: WWR (Cloudflare 403), Lever (v0 API deprecated).
+
+**Cover-letter drafts** (`--drafts`, added 2026-08-24): opt-in, drafts cover letters
+for the top N ranked postings via colibri using `jobscrape/profile.md` (gitignored —
+copy `profile.example.md`). Never submits anything; writes
+`postings/<id>-draft.md` for a human to read and send. Off by default — see
+`jobscrape/README.md`.
+
+**Colibri coordination** (added 2026-08-24): `mcp-colibri`'s `/health` is now
+published to `127.0.0.1:8090` (loopback only, GET-only, no auth — see
+SECURITY-REVIEW.md §4 R14) so the host-side scrape can check `jobs_running`
+before firing its own colibri calls and back off briefly if an in-conversation
+`ask_colibri` job is mid-flight. Best-effort, fails open.
+
+**Not built — a "task tracker tangent":** turning `seen.json`/the digest into a
+full application-status tracker (applied/interviewing/rejected, follow-up
+reminders) was considered and deliberately deferred — that's a different kind of
+tool than "finds and ranks postings," and deserves its own scoped design rather
+than growing out of dedupe state as a side effect. See `jobscrape/README.md`.
 
 **Pipeline**: fetch all sources → word-boundary keyword pre-filter (3 tracks: esports,
 IT/DevOps, producer-PM) → drop already-seen postings → sort so curated ATS sources
