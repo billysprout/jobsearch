@@ -384,6 +384,23 @@ ratio-based reserve heuristic elsewhere that clamps it, roughly half the context
 not chased further since the practical outcome — no more overflow — was already
 confirmed.)
 
+**Update 2026-08-24: found that second heuristic.** Read straight from OpenClaw's compiled
+source (`attempt-tool-run-context.js` / `agent-compaction-constants.js`):
+`MIN_PROMPT_BUDGET_TOKENS = 8000` and `MIN_PROMPT_BUDGET_RATIO = 0.5`, combined as
+`minPromptBudget = min(MIN_PROMPT_BUDGET_TOKENS, contextWindow * MIN_PROMPT_BUDGET_RATIO)`,
+then `effectiveReserveTokens = min(requestedReserveTokens, contextWindow - minPromptBudget)`.
+This is a hardcoded platform floor, not exposed in `openclaw.json` — no matter how low
+`reserveTokensFloor` is set, the effective reserve can't push prompt budget above roughly
+50% of the context window (subject to the 8,000-token absolute floor once the window gets
+large enough). It's also worth noting explicitly: OpenClaw's own generic
+auto-compaction-failure message suggests raising `reserveTokensFloor` to 20,000+ regardless
+of which model is active — that's fine advice for z.ai's huge-context cloud models, but
+would be a direct regression back to the exact bug above if followed while the local
+gemma4 fallback is the active model. This mechanism is also *why* raising gemma4's actual
+context window (see the update above) was the real fix once the floor alone stopped
+helping — it changes what 50% actually means, rather than continuing to fight a hardcoded
+platform clamp on the reserve side.
+
 ## The `ask_colibri` tool: from synchronous, to fire-and-poll, to actually reliable
 
 This tool went through three real bugs before it was solid. Worth the full story since
