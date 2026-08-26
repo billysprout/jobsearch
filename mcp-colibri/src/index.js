@@ -1,9 +1,11 @@
 // mcp-colibri — MCP tool server that proxies to a local colibri model.
 //
-// Exposes two tools:
+// Exposes three tools:
 //   ask_colibri   — fires a prompt at colibri, returns a job_id immediately
 //                    (does NOT block waiting for colibri's answer)
 //   check_colibri — polls a job_id for its current status/result
+//   list_colibri  — lists recent jobs and their status, so the agent can see
+//                    what's in flight/done without needing a job_id in hand
 //
 // Colibri (359 GB MoE, disk-streamed experts) can take 1-15+ minutes per
 // query. A synchronous tool call that blocks for that long holds the calling
@@ -305,6 +307,70 @@ async function handleCheckColibri({ job_id }) {
   };
 }
 
+// --- Tool: list_colibri (list recent jobs) ---
+const LIST_TOOL_DESC = [
+  "List recent colibri jobs (from ask_colibri) and their status.",
+  "Use this to see what's running/done/errored without already having a",
+  "job_id — e.g. after a session gap, or to check whether an earlier ask is",
+  "still in flight before firing another one.",
+  "",
+  "Returns id, status, elapsed/total time, prompt preview, and live progress",
+  "for running jobs (same 'chars generated so far' signal as check_colibri).",
+  "Sorted most-recent-first. Jobs age out of the list entirely after 4h",
+  "(same retention as check_colibri).",
+].join("\n");
+
+const LIST_TOOL_PARAMS = {
+  status: z.enum(["running", "done", "error", "all"]).optional()
+    .describe("Filter by job status (default: all)"),
+  limit: z.number().optional()
+    .describe("Max jobs to return, most recent first (default: 20)"),
+};
+
+async function handleListColibri({ status, limit }) {
+  const filterStatus = status && status !== "all" ? status : null;
+  const max = limit && limit > 0 ? limit : 20;
+
+  const all = [...jobs.values()]
+    .filter(j => !filterStatus || j.status === filterStatus)
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  if (!all.length) {
+    return {
+      content: [{ type: "text", text: filterStatus ? `No ${filterStatus} jobs.` : "No jobs (nothing asked yet, or everything aged out after 4h)." }],
+    };
+  }
+
+  const shown = all.slice(0, max);
+  const lines = shown.map(j => {
+    const now = Date.now();
+    let timing;
+    if (j.status === "running") {
+      timing = `${Math.round((now - j.createdAt) / 1000)}s elapsed`;
+    } else {
+      timing = `${Math.round((j.finishedAt - j.createdAt) / 1000)}s total`;
+    }
+
+    let extra = "";
+    if (j.status === "running") {
+      extra = j.chunkCount > 0
+        ? ` — ${j.partialContent.length} chars so far, last chunk ${Math.round((now - j.lastChunkAt) / 1000)}s ago`
+        : ` — still in prefill`;
+    } else if (j.status === "error") {
+      extra = ` — ${j.error}`;
+    } else if (j.status === "done") {
+      extra = j.delivered ? ` — delivered` : ` — not yet delivered`;
+    }
+
+    return `[${j.id}] ${j.status} (${timing})${extra}\n  prompt: "${j.promptPreview}..."`;
+  });
+
+  const header = `${shown.length}${all.length > shown.length ? `/${all.length}` : ""} job(s)${filterStatus ? ` (status=${filterStatus})` : ""}:`;
+  return {
+    content: [{ type: "text", text: `${header}\n\n${lines.join("\n\n")}` }],
+  };
+}
+
 // Factory: each SSE connection gets its own McpServer (SDK enforces
 // single-transport-per-instance — reusing one crashes on the second client).
 // The `jobs` map above is module-level, so job_ids survive across
@@ -313,6 +379,7 @@ function createMcpServer() {
   const server = new McpServer({ name: "colibri-proxy", version: "2.0.0" });
   server.tool("ask_colibri", ASK_TOOL_DESC, ASK_TOOL_PARAMS, handleAskColibri);
   server.tool("check_colibri", CHECK_TOOL_DESC, CHECK_TOOL_PARAMS, handleCheckColibri);
+  server.tool("list_colibri", LIST_TOOL_DESC, LIST_TOOL_PARAMS, handleListColibri);
   return server;
 }
 
@@ -417,5 +484,5 @@ httpServer.listen(PORT, () => {
   console.error(`[mcp-colibri] Timeout: ${COLIBRI_TIMEOUT_MS / 1000}s`);
   console.error(`[mcp-colibri] Job retention: ${JOB_RETENTION_MS / 3600000}h`);
   console.error(`[mcp-colibri] LOG_LEVEL: ${LOG_LEVEL}`);
-  console.error(`[mcp-colibri] tools: ask_colibri (fire), check_colibri (poll)`);
+  console.error(`[mcp-colibri] tools: ask_colibri (fire), check_colibri (poll), list_colibri (list)`);
 });
