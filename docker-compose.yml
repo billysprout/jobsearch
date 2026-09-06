@@ -65,7 +65,7 @@ services:
       NODE_USE_ENV_PROXY: "1"
       HTTP_PROXY: http://egress:3128
       HTTPS_PROXY: http://egress:3128
-      NO_PROXY: localhost,127.0.0.1,mcp-colibri
+      NO_PROXY: localhost,127.0.0.1,mcp-colibri,mcp-salary
       TZ: ${OPENCLAW_TZ:-UTC}
     # host.docker.internal resolves to the Windows host so the agent can reach a
     # locally-running colibri model server (plain HTTP, port 8000). Traffic still
@@ -93,8 +93,12 @@ services:
     # is ONLY via frontend -> 127.0.0.1:18789, token-authenticated. A loopback
     # bind would be unreachable from the forwarder (different netns).
     command: ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789"]
+    # Mirrors the image's built-in HEALTHCHECK (inline fetch of the gateway's
+    # own /healthz). A previous override ran `node dist/docker-healthcheck.js`,
+    # a file that does not exist in the pinned image — Docker reported the
+    # gateway "unhealthy" for days while the gateway itself was fine.
     healthcheck:
-      test: ["CMD", "node", "dist/docker-healthcheck.js"]
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 30s
       timeout: 5s
       retries: 5
