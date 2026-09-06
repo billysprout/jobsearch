@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fetchAll } from "./sources.mjs";
+import { firstTrackMatch } from "./keywords.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const config = JSON.parse(readFileSync(resolve(__dirname, "config.json"), "utf8"));
@@ -17,13 +18,13 @@ console.error(`[diag] seen.json has ${seen.size} entries (read-only, not modifyi
 const all = await fetchAll(config);
 console.error(`[diag] fresh fetch: ${all.length} postings`);
 
+// Same matcher the scrape pipeline uses (keywords.mjs word-boundary match).
+// This used to be its own `text.includes(kw)` loop, i.e. the pre-aws/laws-fix
+// substring matcher — so this diag reported inflated match counts that the
+// real pipeline never acted on.
 function matchesAnyTrack(p) {
-  const text = `${p.title} ${p.company} ${p.bodyText}`.toLowerCase();
-  for (const [key, track] of Object.entries(config.tracks)) {
-    const hit = track.keywords.find(kw => text.includes(kw.toLowerCase()));
-    if (hit) return { track: key, keyword: hit };
-  }
-  return null;
+  const text = `${p.title} ${p.company} ${p.bodyText}`;
+  return firstTrackMatch(text, config.tracks);
 }
 
 const bySource = {};
