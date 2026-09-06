@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "description": "Host-side job scraping pipeline for the OpenClaw sandbox.",
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
   "dependencies": {
     "pdfkit": "^0.15.0"
   }

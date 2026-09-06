@@ -8,9 +8,10 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fetchAll } from "./sources.mjs";
 import { firstTrackMatch } from "./keywords.mjs";
+import { loadConfig } from "./config.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const config = JSON.parse(readFileSync(resolve(__dirname, "config.json"), "utf8"));
+const config = loadConfig();
 const seen = new Set(JSON.parse(readFileSync(resolve(__dirname, "state", "seen.json"), "utf8")));
 
 console.error(`[diag] seen.json has ${seen.size} entries (read-only, not modifying)`);

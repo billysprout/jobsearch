@@ -13,10 +13,11 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { profileToResumePdf } from "./pdf.mjs";
 import { writeFilesToVolume } from "./volume-writer.mjs";
+import { loadConfig } from "./config.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROFILE_PATH = resolve(__dirname, "profile.md");
-const config = JSON.parse(readFileSync(resolve(__dirname, "config.json"), "utf8"));
+const config = loadConfig();
 
 const args = process.argv.slice(2);
 const LOCAL_ONLY = args.includes("--local-only");

@@ -21,6 +21,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFilesToVolume } from "./volume-writer.mjs";
+import { loadConfig } from "./config.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RESUME_PATH = resolve(__dirname, "resume.md");
@@ -43,7 +44,7 @@ if (!LIST && !POSTING_ID) {
   process.exit(1);
 }
 
-const config = JSON.parse(readFileSync(resolve(__dirname, "config.json"), "utf8"));
+const config = loadConfig();
 
 // --- Posting lookup ---
 // Postings live in state/digest-<date>.json as rankings with a full _posting

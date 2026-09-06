@@ -10,12 +10,7 @@
 // still used for explicit --no-colibri runs and the heuristicSkipThreshold pre-gate
 // (config.colibri.heuristicSkipThreshold) — both deliberate, not offline fallback.
 
-import { readFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import { bestTrackScore } from "./keywords.mjs";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /** @typedef {{ id: string, score: number, track: string, one_line: string, fit_notes: string }} Ranking */
 
@@ -157,15 +152,12 @@ export async function rankPostings(config, postings, onChunkRanked) {
 /**
  * Heuristic fallback when colibri is unreachable.
  * @param {Array<{id: string, title: string, bodyText: string, company: string}>} postings
+ * @param {Record<string, {keywords: string[], weight?: number}>} tracks — from config.tracks;
+ *   required (every caller already has the config, and a silent disk re-read
+ *   here is exactly the kind of hidden IO this refactor removes)
  * @returns {Ranking[]}
  */
 export function heuristicRankings(postings, trackKeywords) {
-  // Load config for keywords if not passed
-  if (!trackKeywords) {
-    const config = JSON.parse(readFileSync(resolve(__dirname, "config.json"), "utf8"));
-    trackKeywords = config.tracks;
-  }
-
   return postings.map(p => {
     const text = `${p.title} ${p.company} ${p.bodyText}`.toLowerCase();
     const { track, score } = bestTrackScore(text, trackKeywords);

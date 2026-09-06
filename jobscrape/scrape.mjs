@@ -58,6 +58,7 @@ import { rankPostings, heuristicRankings } from "./colibri.mjs";
 import { firstTrackMatch, bestTrackScore } from "./keywords.mjs";
 import { draftTopN } from "./draft.mjs";
 import { writeFilesToVolume } from "./volume-writer.mjs";
+import { loadConfig } from "./config.mjs";
 
 // --- CLI ---
 const args = process.argv.slice(2);
@@ -80,7 +81,7 @@ if (!ONCE) {
 }
 
 // --- Config ---
-const config = JSON.parse(readFileSync(resolve(__dirname, "config.json"), "utf8"));
+const config = loadConfig();
 const STATE_DIR = resolve(__dirname, "state");
 const STAGING_DIR = resolve(__dirname, "staging");
 
@@ -405,8 +406,7 @@ async function main() {
   // postings (carried over from a prior colibri outage) go first — they're
   // the oldest work in the queue and get first claim on this run's budget.
   console.error("[main] step 4/6: prioritizing + capping...");
-  const perCompanyMax = config.perCompanyMax ?? 3;
-  const sorted = interleaveByCompany(freshMatched, perCompanyMax);
+  const sorted = interleaveByCompany(freshMatched, config.selection.perCompanyMax);
   const combinedPool = [...pendingQueue.values(), ...sorted];
   const candidates = combinedPool.slice(0, LIMIT);
   console.error(`[main] ${candidates.length} candidates after priority sort + cap (${pendingQueue.size} pending + ${freshMatched.length} new-eligible)`);
