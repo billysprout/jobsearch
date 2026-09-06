@@ -58,8 +58,10 @@ wholesale**, `null` is a meaningful "off"):
 2. `configs/base.json` — the repo's actual content (tracks, ATS slugs,
    keywords, sources); checked in, applies to every run
 3. `configs/<profile>.json` — per-run overlays. `production.json` sets
-   `selection.limit: 10` (the 07:00 task also passes `--limit 10`); `dev.json`
-   is the fast no-colibri dry-run.
+   `selection.limit: 10` (the 07:00 task also passes `--limit 10`), enables the
+   `recency` (30 days) and `blocklist` (empty — edit `filterConfig.blocklist`)
+   filters, and reserves 3 of the 10 slots for non-curated sources;
+   `dev.json` is the fast no-colibri dry-run.
 
 The validator rejects unknown keys (with a Levenshtein suggestion for
 typos), requires each track to have `label` + `keywords` + `description`

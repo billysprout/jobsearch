@@ -1,5 +1,16 @@
 {
+  "filters": ["keyword-match", "recency", "blocklist"],
+  "filterConfig": {
+    "recency": {
+      "maxAgeDays": 30
+    },
+    "blocklist": {
+      "companies": [],
+      "titlePatterns": []
+    }
+  },
   "selection": {
-    "limit": 10
+    "limit": 10,
+    "reservedSlots": 3
   }
 }
