@@ -14,66 +14,149 @@
     "esports": {
       "label": "Esports / Gaming Ops",
       "keywords": [
-        "esport", "esports", "tournament", "competitive gaming",
-        "league ops", "valorant", "cs2", "counter-strike", "dota",
-        "league of legends", "rocket league", "overwatch", "fortnite",
-        "smash", "fighting game", "broadcast", "shoutcast",
-        "scouting", "game ops", "live ops", "production assistant",
-        "observer", "faceit", "pml"
+        "esport",
+        "esports",
+        "tournament",
+        "competitive gaming",
+        "league ops",
+        "valorant",
+        "cs2",
+        "counter-strike",
+        "dota",
+        "league of legends",
+        "rocket league",
+        "overwatch",
+        "fortnite",
+        "smash",
+        "fighting game",
+        "broadcast",
+        "shoutcast",
+        "scouting",
+        "game ops",
+        "live ops",
+        "production assistant",
+        "observer",
+        "faceit",
+        "pml"
       ],
-      "weight": 1.0
+      "weight": 1,
+      "description": "tournament ops, team management, broadcast, competitive gaming"
     },
     "it-devops": {
       "label": "IT / Sysadmin / DevOps",
       "keywords": [
-        "sysadmin", "system admin", "system administrator",
-        "devops", "sre", "site reliability", "platform engineer",
-        "infrastructure", "cloud engineer", "aws", "azure", "gcp",
-        "kubernetes", "docker", "terraform", "ansible", "puppet",
-        "linux admin", "windows admin", "network engineer",
-        "it support", "helpdesk", "desktop support",
-        "security engineer", "soc analyst", "incident response",
+        "sysadmin",
+        "system admin",
+        "system administrator",
+        "devops",
+        "sre",
+        "site reliability",
+        "platform engineer",
+        "infrastructure",
+        "cloud engineer",
+        "aws",
+        "azure",
+        "gcp",
+        "kubernetes",
+        "docker",
+        "terraform",
+        "ansible",
+        "puppet",
+        "linux admin",
+        "windows admin",
+        "network engineer",
+        "it support",
+        "helpdesk",
+        "desktop support",
+        "security engineer",
+        "soc analyst",
+        "incident response",
         "noc"
       ],
-      "weight": 0.8
+      "weight": 0.8,
+      "description": "infrastructure, SRE, cloud, sysadmin, security"
     },
     "producer-pm": {
       "label": "Producer / Project Management",
       "keywords": [
-        "producer", "project manager", "program manager", "tpm",
-        "technical program manager", "delivery manager",
-        "scrum master", "agile coach", "product owner",
-        "project coordinator", "operations manager",
-        "content producer", "creative producer",
-        "production coordinator", "line producer",
-        "studio manager", "broadcast producer",
-        "technical producer", "associate producer"
+        "producer",
+        "project manager",
+        "program manager",
+        "tpm",
+        "technical program manager",
+        "delivery manager",
+        "scrum master",
+        "agile coach",
+        "product owner",
+        "project coordinator",
+        "operations manager",
+        "content producer",
+        "creative producer",
+        "production coordinator",
+        "line producer",
+        "studio manager",
+        "broadcast producer",
+        "technical producer",
+        "associate producer"
       ],
-      "weight": 0.9
+      "weight": 0.9,
+      "description": "producer, PM, TPM, delivery, agile"
     }
   },
   "sources": {
-    "remoteok": { "enabled": true },
-    "remotive": { "enabled": false },
-    "wwr": { "enabled": false },
-    "hn": { "enabled": true },
-    "greenhouse": { "enabled": true },
-    "lever": { "enabled": false },
-    "workable": { "enabled": false },
-    "ashby": { "enabled": true }
+    "remoteok": {
+      "enabled": true
+    },
+    "remotive": {
+      "enabled": false
+    },
+    "wwr": {
+      "enabled": false
+    },
+    "hn": {
+      "enabled": true
+    },
+    "greenhouse": {
+      "enabled": true
+    },
+    "lever": {
+      "enabled": false
+    },
+    "workable": {
+      "enabled": false
+    },
+    "ashby": {
+      "enabled": true
+    }
   },
   "ats": {
     "greenhouse": {
-      "bungie": { "label": "Bungie" },
-      "krafton": { "label": "Krafton" },
-      "launchdarkly": { "label": "LaunchDarkly" },
-      "temporaltechnologies": { "label": "Temporal" },
-      "webflow": { "label": "Webflow" },
-      "scopely": { "label": "Scopely" }
+      "bungie": {
+        "label": "Bungie"
+      },
+      "krafton": {
+        "label": "Krafton"
+      },
+      "launchdarkly": {
+        "label": "LaunchDarkly"
+      },
+      "temporaltechnologies": {
+        "label": "Temporal"
+      },
+      "webflow": {
+        "label": "Webflow"
+      },
+      "scopely": {
+        "label": "Scopely"
+      }
     },
     "ashby": {
-      "ramp": { "label": "Ramp" },
-      "vanta": { "label": "Vanta" }
+      "ramp": {
+        "label": "Ramp"
+      },
+      "vanta": {
+        "label": "Vanta"
+      }
     }
   },
   "wwr": {

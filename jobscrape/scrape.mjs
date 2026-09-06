@@ -263,14 +263,20 @@ function renderDigest(dateStr, ranked, colibriOnline) {
   const trackLabels = {};
   for (const [key, t] of Object.entries(config.tracks)) trackLabels[key] = t.label;
 
-  const byTrack = { esports: [], "it-devops": [], "producer-pm": [], none: [] };
+  // Buckets derive from config.tracks (config order, "none" last) — adding a
+  // track in config updates the digest layout without touching this code.
+  // Today's config order is alphabetical, matching the pre-derivation
+  // literal exactly (parity-guarded by test/parity.test.mjs).
+  const byTrack = {};
+  for (const key of Object.keys(config.tracks)) byTrack[key] = [];
+  byTrack.none = [];
   for (const r of ranked) {
     (byTrack[r.track] || byTrack.none).push(r);
   }
 
   let md = `# Job Digest — ${dateStr}\n\n`;
   if (colibriOnline) {
-    md += `Ranked by **colibri (glm-5.2-colibri)**. ${ranked.length} postings scored.\n\n`;
+    md += `Ranked by **colibri (${config.colibri.model})**. ${ranked.length} postings scored.\n\n`;
   } else {
     md += `> **colibri: OFFLINE (heuristic scores)** -- keyword-based only.\n\n`;
   }
@@ -335,13 +341,22 @@ function renderCard(r) {
     + `## Job Description (excerpt)\n${(p.bodyText || "").substring(0, 2000)}\n`;
 }
 
+// Tracks line derives from config.tracks (labels with " / " collapsed, as
+// "Esports / Gaming Ops" reads better in a digest heading than in a sentence).
+// Adding a track in config updates this file too — one of the four former
+// hand-edited copies of the taxonomy.
+const AGENT_TRACK_NAMES = Object
+  .values(config.tracks)
+  .map(t => t.label.replace(/ \/ /g, "/"))
+  .join(", ");
+
 const AGENT_README = [
   "# jobs/",
   "",
   "This directory contains daily job digests scraped from the host machine.",
   "Read the latest digest in digest/ for ranked postings, or individual cards in postings/.",
   "",
-  "Tracks: Esports/Gaming Ops, IT/DevOps/Sysadmin, Producer/PM.",
+  `Tracks: ${AGENT_TRACK_NAMES}.`,
   "",
   "digest/<date>-summary.json is a compact top-N-per-track version of the same",
   "date's digest, consumed by digest-notify.mjs for the WhatsApp push.",

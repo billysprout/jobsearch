@@ -13,8 +13,9 @@ import {
 } from "../config.mjs";
 
 // Minimal user content — tracks/sources/ats are required and have no defaults.
+// description is required on tracks: it feeds the generated colibri prompt.
 const MINIMAL = {
-  tracks: { esports: { label: "Esports", keywords: ["esport"] } },
+  tracks: { esports: { label: "Esports", description: "esports ops", keywords: ["esport"] } },
   sources: { hn: { enabled: true } },
 };
 
@@ -119,10 +120,14 @@ test("all problems reported at once, not just the first", () => {
   }
 });
 
-test("track entries need label + keywords; weight/description type-checked", () => {
+test("track entries need label + keywords + description; weight type-checked", () => {
   assert.throws(
     () => validateConfig(deepMerge(DEFAULTS, { tracks: { x: { label: "X" } }, sources: MINIMAL.sources })),
     /tracks\.x\.keywords/,
+  );
+  assert.throws(
+    () => validateConfig(deepMerge(DEFAULTS, { tracks: { x: { label: "X", keywords: ["k"] } }, sources: MINIMAL.sources })),
+    /tracks\.x\.description.*feeds the generated colibri prompt/,
   );
   assert.throws(
     () => validateConfig(deepMerge(DEFAULTS, { tracks: { x: { label: "X", keywords: ["k"], weight: "high" } }, sources: MINIMAL.sources })),

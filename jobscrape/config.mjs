@@ -322,10 +322,10 @@ function validateOpenMaps(cfg, problems) {
         if (track.weight !== undefined && (typeof track.weight !== "number" || !Number.isFinite(track.weight) || track.weight < 0)) {
           problems.push(`tracks.${key}.weight must be a number >= 0`);
         }
-        // `description` becomes required once the colibri prompt is generated
-        // from tracks (pipeline/prompt.mjs); optional until then.
-        if (track.description !== undefined && (typeof track.description !== "string" || !track.description)) {
-          problems.push(`tracks.${key}.description must be a non-empty string when present`);
+        // Required: feeds the generated colibri prompt's numbered track lines
+        // (pipeline/prompt.mjs) — a track without one can't be scored.
+        if (typeof track.description !== "string" || !track.description) {
+          problems.push(`tracks.${key}.description must be a non-empty string (feeds the generated colibri prompt)`);
         }
       }
     }

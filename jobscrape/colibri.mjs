@@ -11,23 +11,9 @@
 // (config.colibri.heuristicSkipThreshold) — both deliberate, not offline fallback.
 
 import { bestTrackScore } from "./keywords.mjs";
+import { buildSystemPrompt, trackWhitelist } from "./pipeline/prompt.mjs";
 
 /** @typedef {{ id: string, score: number, track: string, one_line: string, fit_notes: string }} Ranking */
-
-const SYSTEM_PROMPT = `You are a job-posting analyst. Given a batch of job postings, score each one against three role tracks:
-
-1. "esports" — Esports / Gaming Ops (tournament ops, team management, broadcast, competitive gaming)
-2. "it-devops" — IT / Sysadmin / DevOps (infrastructure, SRE, cloud, sysadmin, security)
-3. "producer-pm" — Producer / Project Management (producer, PM, TPM, delivery, agile)
-
-For EACH posting, return a JSON object with:
-- "id": the exact id string from the input (do NOT change it)
-- "score": 0-100 (how strong a fit for ANY of the three tracks)
-- "track": one of "esports", "it-devops", "producer-pm", or "none"
-- "one_line": one sentence explaining why it's relevant (or why it's not)
-- "fit_notes": 2-3 bullet points on key fit factors
-
-Return ONLY a JSON array of these objects, one per posting, in the same order as input. No markdown fences, no extra text.`;
 
 
 /**
@@ -51,6 +37,11 @@ export async function rankPostings(config, postings, onChunkRanked) {
 
   const { baseUrl, model, timeoutMs, chunkSize } = config.colibri;
   const endpoint = `${baseUrl}/chat/completions`;
+  // Taxonomy derives from config.tracks — see pipeline/prompt.mjs for why
+  // the generated prompt's bytes matter (KV cache) and why tracks sort
+  // alphabetically.
+  const systemPrompt = buildSystemPrompt(config.tracks);
+  const whitelist = trackWhitelist(config.tracks);
   const allRankings = [];
   let colibriOnline = true;
 
@@ -84,7 +75,7 @@ export async function rankPostings(config, postings, onChunkRanked) {
         body: JSON.stringify({
           model,
           messages: [
-            { role: "system", content: SYSTEM_PROMPT },
+            { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
           ],
           max_tokens: chunk.length * 256,
@@ -133,7 +124,7 @@ export async function rankPostings(config, postings, onChunkRanked) {
       if (usage) console.error(`[colibri] tokens: ${usage.prompt_tokens}+${usage.completion_tokens}=${usage.total_tokens}`, `[elapsed=${(Date.now() - t0) / 1000}s]`);
       else console.error(`[colibri] no usage in response`, `[elapsed=${(Date.now() - t0) / 1000}s]`);
 
-      const parsed = parseRankingResponse(content, chunk.map(p => p.id));
+      const parsed = parseRankingResponse(content, chunk.map(p => p.id), whitelist);
       allRankings.push(...parsed);
       console.error(`[colibri] parsed ${parsed.length}/${chunk.length} rankings from chunk`);
       await publishChunk(parsed, chunk, true);
@@ -230,7 +221,7 @@ function buildUserPrompt(chunk) {
   return `${USER_PROMPT_INTRO}\n\n${items.join("\n\n")}`;
 }
 
-function parseRankingResponse(content, expectedIds) {
+function parseRankingResponse(content, expectedIds, trackWhitelist) {
   // Strip markdown fences if present
   let cleaned = content.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "").trim();
 
@@ -249,7 +240,7 @@ function parseRankingResponse(content, expectedIds) {
     return arr.map(r => ({
       id: String(r.id || "unknown"),
       score: Math.max(0, Math.min(100, Number(r.score) || 0)),
-      track: ["esports", "it-devops", "producer-pm", "none"].includes(r.track) ? r.track : "none",
+      track: trackWhitelist.includes(r.track) ? r.track : "none",
       one_line: String(r.one_line || "").substring(0, 200),
       fit_notes: String(r.fit_notes || "").substring(0, 500),
     }));
