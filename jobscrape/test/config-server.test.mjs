@@ -201,15 +201,27 @@ describe("config-server", () => {
       assert.ok(entry.backup);
     });
 
-    test("restore_backup round-trips the config through the same validated path", async () => {
-      const before = readLayer(dir, "production.json");
-      const snapshot = fs.readdirSync(path.join(dir, "configs", ".backups")).filter(f => f.endsWith(".json")).sort()[0];
-      // mutate something first so restore has something to undo
-      await api(port, "POST", "/action", { body: { action: "set_per_company_max", params: { max: 5 } } });
-      assert.equal(readLayer(dir, "production.json").selection.perCompanyMax, 5);
-      const r = await api(port, "POST", "/action", { body: { action: "restore_backup", params: { file: snapshot } } });
-      assert.equal(r.code, 200);
-      assert.deepEqual(readLayer(dir, "production.json"), before);
+    test("restore_backup genuinely undoes the action it snapshotted", async () => {
+      // The snapshot taken by a write must contain the PRE-WRITE state, and
+      // restoring it must actually change the file back. (Both halves of this
+      // once passed vacuously when snapshots captured the post-write state —
+      // restore wrote identical bytes, and the assertion compared the file to
+      // itself.)
+      const pre = readLayer(dir, "production.json");
+      assert.ok(!pre.filterConfig?.blocklist?.companies?.includes("Restore Probe Ltd"));
+
+      const r1 = await api(port, "POST", "/action", { body: { action: "block_company", params: { company: "Restore Probe Ltd" } } });
+      assert.equal(r1.code, 200);
+      const snapshot = fs.readdirSync(path.join(dir, "configs", ".backups"))
+        .filter(f => f.endsWith(".json")).sort().at(-1);
+      // snapshot content = pre-write state, not the mutated layers
+      const snapObj = JSON.parse(fs.readFileSync(path.join(dir, "configs", ".backups", snapshot), "utf8"));
+      assert.ok(!snapObj.production.filterConfig.blocklist.companies.includes("Restore Probe Ltd"));
+
+      const r2 = await api(port, "POST", "/action", { body: { action: "restore_backup", params: { file: snapshot } } });
+      assert.equal(r2.code, 200);
+      const restored = readLayer(dir, "production.json");
+      assert.ok(!restored.filterConfig.blocklist.companies.includes("Restore Probe Ltd"), "restore must remove the blocked company");
       // path climbing refused
       assert.equal((await api(port, "POST", "/action", { body: { action: "restore_backup", params: { file: "../base.json" } } })).code, 400);
     });

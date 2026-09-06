@@ -373,7 +373,13 @@ function performAction(configDir, body) {
     validateLayers(configDir, layers); // throws -> nothing below runs, disk untouched
     fs.mkdirSync(backupDir, { recursive: true });
     const snap = `${nowStamp()}-${body.action}.json`;
-    fs.writeFileSync(path.join(backupDir, snap), JSON.stringify({ base: layers.base, production: layers.production }, null, 2));
+    // Snapshot the PRE-WRITE state (the `before` serializations were captured
+    // before apply() mutated anything) — this file IS the undo point. A
+    // snapshot of the mutated layers would make restore a no-op.
+    fs.writeFileSync(
+      path.join(backupDir, snap),
+      `{\n"base": ${before.base},\n"production": ${before.production}\n}\n`,
+    );
     for (const f of files) writeJsonFile(f, f === layers.baseFile ? layers.base : layers.production);
     fs.appendFileSync(
       path.join(backupDir, "audit.jsonl"),

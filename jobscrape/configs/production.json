@@ -1,5 +1,9 @@
 {
-  "filters": ["keyword-match", "recency", "blocklist"],
+  "filters": [
+    "keyword-match",
+    "recency",
+    "blocklist"
+  ],
   "filterConfig": {
     "recency": {
       "maxAgeDays": 30
