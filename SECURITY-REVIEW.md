@@ -139,12 +139,17 @@ docker compose restart openclaw-gateway
 | `hardened-config.json` | Standard tool/gateway policy overlay |
 | `strict-config.json` | Strict profile — **active** (exec/process denied) |
 | `scripts/merge-config.js` | Deterministic deep-merge into the config volume |
+| `mcp-jobscrape/` | MCP tool server: agent-driven jobscrape configuration. Hardened like mcp-salary (read-only rootfs, cap_drop ALL, no-new-privileges, no host mounts); reaches only `host.docker.internal:8790` through the squid proxy |
+| `jobscrape/config-server.mjs` | Host-side config/status service (:8790). Binds 0.0.0.0 — required for Docker's host-gateway route (same exposure class as colibri :8000) — but unlike colibri every route except `GET /health` is token-gated (constant-time compare, fail-closed without a token). Writes go through config.mjs validation → pre-write snapshot → atomic replace of exactly `configs/base.json` / `configs/production.json` |
+| `jobscrape/register-config-server.ps1` | At-logon Scheduled Task for config-server.mjs (register-task.ps1 pattern) |
 | `setup.sh` | Staged lifecycle: `env · pull · egress · egress-setup · egress-lockdown · onboard · config · audit · verify` |
 | `verify-sandbox.sh` | The 10 escape-path tests (§3 evidence column) |
 | `.env` | Secrets — gateway token + ZAI_API_KEY (gitignored, chmod 600) |
 | Volumes | `openclaw-config` / `openclaw-workspace` / `openclaw-auth` (named volumes — the only writable state) |
 
-**Secrets inventory:** `ZAI_API_KEY` (dedicated GLM Coding Plan key) and `OPENCLAW_GATEWAY_TOKEN`
-(64-hex, generated) live in `.env` on the host and in gateway container env. The token is
+**Secrets inventory:** `ZAI_API_KEY` (dedicated GLM Coding Plan key), `OPENCLAW_GATEWAY_TOKEN`
+(64-hex, generated), and `JOBSCRAPE_CONFIG_TOKEN` (64-hex, generated — config-write power for
+the host config-server, held by the gateway env + mcp-jobscrape container env) live in `.env`
+on the host and in container env. The gateway token is
 referenced by env in `openclaw.json` (never written into the config file). No other
 credentials exist anywhere in the boundary.

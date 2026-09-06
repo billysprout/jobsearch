@@ -90,6 +90,60 @@ Knob map (full defaults in `config.mjs`):
 | `draft.*` / `tailor.*` | cover-letter / resume-tailoring generation budgets |
 | `tracks.<key>.{label, description, keywords, weight}` | the taxonomy — single source of truth for the colibri prompt, the parser whitelist, the digest layout, and the push summary |
 
+## Configuring jobscrape without editing JSON
+
+Everything in the knob map above can also be changed **conversationally** —
+ask the assistant in your usual chat (e.g. the Telegram channel): *"block
+Acme Corp from my job digests"*, *"only show me postings from the last two
+weeks"*, *"what are you watching for me right now?"*. The agent maps the
+request onto a small set of typed tools; nothing in this flow requires
+reading or writing JSON by hand.
+
+```
+chat ("block Acme Corp") ── OpenClaw agent ── mcp-jobscrape container
+                                              │  POST /action + bearer token
+                                              ▼
+                       config-server.mjs (host, 127.0.0.1:8790 — token-gated)
+                         validates via config.mjs → snapshot both layers to
+                         configs/.backups/ → atomic write → audit.jsonl line
+```
+
+What the agent can change: block/unblock companies, hide/unhide title
+patterns, recency on/off (N days), daily limit, reserved slots,
+per-company cap, enable/disable boards, add/remove watched companies (it
+will verify the ATS slug from the board's URL with you first), list and
+restore config snapshots ("undo what we just did"). Deliberately **not**
+changeable: `colibri.generation.*` and the other prompt-shaping knobs —
+changing those costs a full KV-cache re-prefill of the local model, and no
+end-user conversation needs it.
+
+Every write validates the merged config before touching disk (a rejection
+changes nothing), snapshots the previous state of both files into
+`configs/.backups/` (gitignored), and appends an action line to
+`.backups/audit.jsonl`. Edits apply on the **next** run — `scrape.mjs`
+reads config once at startup, there is no live reload.
+
+Two side doors for the operator:
+
+- **Read-only status page** — `http://127.0.0.1:8790/?token=<JOBSCRAPE_CONFIG_TOKEN>`
+  (token lives in the repo-root `.env`): today's digest, pending-queue
+  count, boards watched. No editing, ever.
+- **Direct JSON API** — `GET /config` (same curated view), `GET /status`,
+  `POST /action` with `{action, params}` (same table the agent uses). Auth:
+  `Authorization: Bearer $JOBSCRAPE_CONFIG_TOKEN`.
+
+Lifecycle mirrors the 07:00 task (run once as admin):
+
+```powershell
+cd C:\claw-code-local\openclaw-sandbox\jobscrape
+powershell -ExecutionPolicy Bypass -File register-config-server.ps1
+```
+
+Registers an at-logon Scheduled Task (`OpenClaw-JobScrapeConfigServer`)
+running `node config-server.mjs`; logs append to `logs/config-server.log`.
+It must be up whenever the agent might configure — unlike colibri, nobody
+starts it by hand.
+
 ## Pipeline stages
 
 The pipeline is two named chains, resolved against explicit tables in
