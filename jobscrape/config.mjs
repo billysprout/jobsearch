@@ -66,6 +66,12 @@ export const DEFAULTS = {
     // at unknownSourcePriority (0 = curated ... 3 = last).
     sourcePriorities: { greenhouse: 0, lever: 0, workable: 0, ashby: 0, remotive: 1, hn: 1, remoteok: 2, wwr: 2 },
     unknownSourcePriority: 3,
+    // Reserve N of the limit's slots for candidates from sources whose
+    // priority is >= reservedSourcePriority (the generic boards), so a flood
+    // of curated-ATS postings can't squeeze every board posting out of a
+    // run. 0 disables (off by default — changes what a run selects).
+    reservedSlots: 0,
+    reservedSourcePriority: 1,
   },
 
   // Pipeline stage chains (names resolved against pipeline/registry.mjs).
@@ -219,6 +225,8 @@ const TYPES = {
   "colibri.mcpHealthUrl": "stringOrNull",
   "colibri.heuristicSkipThreshold": "intOrNull",
   "selection.unknownSourcePriority": "nonNegInt",
+  "selection.reservedSlots": "nonNegInt",
+  "selection.reservedSourcePriority": "nonNegInt",
   // Open-ended source → priority map; 0 is a legitimate (curated) priority,
   // and source names are user content, so this can't be inferred as a
   // positive-int object.

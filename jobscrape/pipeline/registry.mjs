@@ -48,12 +48,18 @@
 
 import { ConfigError } from "../config.mjs";
 import * as keywordMatch from "../filters/keyword-match.mjs";
+import * as recency from "../filters/recency.mjs";
+import * as blocklist from "../filters/blocklist.mjs";
 import * as keywordGate from "../scorers/keyword-gate.mjs";
 import * as colibriRank from "../scorers/colibri-rank.mjs";
 import * as keywordHeuristic from "../scorers/keyword-heuristic.mjs";
 
 export const FILTERS = {
   "keyword-match": keywordMatch,
+  // First-party opt-ins, off by default (not in DEFAULTS.filters) — a
+  // profile turns them on by listing them and configuring filterConfig.
+  "recency": recency,
+  "blocklist": blocklist,
 };
 
 export const SCORERS = {

@@ -181,6 +181,9 @@ async function main() {
   console.error("[main] step 4/6: prioritizing + capping...");
   const candidates = buildCandidates(pendingQueue.values(), freshMatched, config.selection);
   console.error(`[main] ${candidates.length} candidates after priority sort + cap (${pendingQueue.size} pending + ${freshMatched.length} new-eligible)`);
+  if (config.selection.reservedSlots > 0) {
+    console.error(`[main] ${config.selection.reservedSlots} slot(s) reserved for sources with priority >= ${config.selection.reservedSourcePriority}`);
+  }
 
   // 5. Scorer chain. Streaming: every ranked chunk is persisted (seen.json,
   // state/digest-<date>.json) and published to the workspace volume as soon

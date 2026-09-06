@@ -43,7 +43,26 @@ export function interleaveByCompany(postings, selection) {
 // Pending postings (carried over from a prior colibri outage) go first —
 // they're the oldest work in the queue and get first claim on this run's
 // budget — then the interleaved new candidates, capped at selection.limit.
+//
+// With selection.reservedSlots > 0, the last N slots are held for candidates
+// from sources whose priority >= selection.reservedSourcePriority (the
+// generic boards), so a flood of curated-ATS postings can't squeeze every
+// board posting out of a run. Slots the reserved pool can't fill are
+// backfilled from the remaining interleaved candidates, so reserving never
+// shrinks a run. reservedSlots: 0 (the default) reproduces the plain cap.
 export function buildCandidates(pendingPostings, freshMatched, selection) {
+  const limit = selection.limit;
+  const reserved = Math.min(selection.reservedSlots || 0, limit);
   const sorted = interleaveByCompany(freshMatched, selection);
-  return [...pendingPostings, ...sorted].slice(0, selection.limit);
+
+  if (!reserved) return [...pendingPostings, ...sorted].slice(0, limit);
+
+  const head = [...pendingPostings, ...sorted].slice(0, limit - reserved);
+  const chosen = new Set(head.map(p => `${p.source}:${p.id}`));
+  const reservedPick = sorted
+    .filter(p => !chosen.has(`${p.source}:${p.id}`) && sourcePriorityOf(p.source, selection) >= selection.reservedSourcePriority)
+    .slice(0, reserved);
+  const reservedIds = new Set(reservedPick.map(p => `${p.source}:${p.id}`));
+  const rest = sorted.filter(p => !chosen.has(`${p.source}:${p.id}`) && !reservedIds.has(`${p.source}:${p.id}`));
+  return [...head, ...reservedPick, ...rest].slice(0, limit);
 }
