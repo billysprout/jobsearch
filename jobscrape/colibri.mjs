@@ -10,7 +10,7 @@
 // still used for explicit --no-colibri runs and the heuristicSkipThreshold pre-gate
 // (config.colibri.heuristicSkipThreshold) — both deliberate, not offline fallback.
 
-import { bestTrackScore } from "./keywords.mjs";
+import { bestTrackScore, DEFAULT_KEYWORD_SCORING } from "./keywords.mjs";
 import { buildSystemPrompt, trackWhitelist } from "./pipeline/prompt.mjs";
 
 /** @typedef {{ id: string, score: number, track: string, one_line: string, fit_notes: string }} Ranking */
@@ -36,6 +36,7 @@ export async function rankPostings(config, postings, onChunkRanked) {
   if (!postings.length) return { rankings: [], colibriOnline: true };
 
   const { baseUrl, model, timeoutMs, chunkSize } = config.colibri;
+  const generation = config.colibri.generation;
   const endpoint = `${baseUrl}/chat/completions`;
   // Taxonomy derives from config.tracks — see pipeline/prompt.mjs for why
   // the generated prompt's bytes matter (KV cache) and why tracks sort
@@ -56,7 +57,7 @@ export async function rankPostings(config, postings, onChunkRanked) {
 
   for (let i = 0; i < postings.length; i += chunkSize) {
     const chunk = postings.slice(i, i + chunkSize);
-    const userPrompt = buildUserPrompt(chunk);
+    const userPrompt = buildUserPrompt(chunk, generation);
 
     await waitForMcpColibriIdle(config);
 
@@ -78,8 +79,8 @@ export async function rankPostings(config, postings, onChunkRanked) {
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
           ],
-          max_tokens: chunk.length * 256,
-          temperature: 0.2,
+          max_tokens: chunk.length * generation.maxTokensPerPosting,
+          temperature: generation.temperature,
           stream: true,
         }),
         signal: controller.signal,
@@ -124,7 +125,7 @@ export async function rankPostings(config, postings, onChunkRanked) {
       if (usage) console.error(`[colibri] tokens: ${usage.prompt_tokens}+${usage.completion_tokens}=${usage.total_tokens}`, `[elapsed=${(Date.now() - t0) / 1000}s]`);
       else console.error(`[colibri] no usage in response`, `[elapsed=${(Date.now() - t0) / 1000}s]`);
 
-      const parsed = parseRankingResponse(content, chunk.map(p => p.id), whitelist);
+      const parsed = parseRankingResponse(content, chunk.map(p => p.id), whitelist, generation);
       allRankings.push(...parsed);
       console.error(`[colibri] parsed ${parsed.length}/${chunk.length} rankings from chunk`);
       await publishChunk(parsed, chunk, true);
@@ -146,12 +147,14 @@ export async function rankPostings(config, postings, onChunkRanked) {
  * @param {Record<string, {keywords: string[], weight?: number}>} tracks — from config.tracks;
  *   required (every caller already has the config, and a silent disk re-read
  *   here is exactly the kind of hidden IO this refactor removes)
+ * @param {{pointsPerKeyword: number, scoreCap: number, defaultWeight: number}} [scoring]
+ *   from config.scoring.keyword — omit for the built-in defaults
  * @returns {Ranking[]}
  */
-export function heuristicRankings(postings, trackKeywords) {
+export function heuristicRankings(postings, trackKeywords, scoring = DEFAULT_KEYWORD_SCORING) {
   return postings.map(p => {
     const text = `${p.title} ${p.company} ${p.bodyText}`.toLowerCase();
-    const { track, score } = bestTrackScore(text, trackKeywords);
+    const { track, score } = bestTrackScore(text, trackKeywords, scoring);
 
     return {
       id: p.id,
@@ -180,13 +183,12 @@ async function waitForMcpColibriIdle(config) {
   const healthUrl = config.colibri?.mcpHealthUrl;
   if (!healthUrl) return;
 
-  const maxAttempts = 3;
-  const pollDelayMs = 5000;
+  const { maxAttempts, pollDelayMs, requestTimeoutMs } = config.colibri.busyCheck;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let health;
     try {
-      const res = await fetch(healthUrl, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(healthUrl, { signal: AbortSignal.timeout(requestTimeoutMs) });
       if (!res.ok) return; // unreachable/misconfigured — don't block on it
       health = await res.json();
     } catch {
@@ -213,15 +215,15 @@ async function waitForMcpColibriIdle(config) {
 // today regardless of wording, so this costs nothing).
 const USER_PROMPT_INTRO = "Score the following job posting(s):";
 
-function buildUserPrompt(chunk) {
+function buildUserPrompt(chunk, generation) {
   const items = chunk.map((p, i) => {
-    const excerpt = (p.bodyText || "").substring(0, 800);
+    const excerpt = (p.bodyText || "").substring(0, generation.bodyExcerptChars);
     return `${i + 1}. [id: "${p.id}"] ${p.company} — ${p.title}\n   Location: ${p.location || "N/A"} | Salary: ${p.salary || "N/A"}\n   ${excerpt}`;
   });
   return `${USER_PROMPT_INTRO}\n\n${items.join("\n\n")}`;
 }
 
-function parseRankingResponse(content, expectedIds, trackWhitelist) {
+function parseRankingResponse(content, expectedIds, trackWhitelist, generation) {
   // Strip markdown fences if present
   let cleaned = content.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "").trim();
 
@@ -241,8 +243,8 @@ function parseRankingResponse(content, expectedIds, trackWhitelist) {
       id: String(r.id || "unknown"),
       score: Math.max(0, Math.min(100, Number(r.score) || 0)),
       track: trackWhitelist.includes(r.track) ? r.track : "none",
-      one_line: String(r.one_line || "").substring(0, 200),
-      fit_notes: String(r.fit_notes || "").substring(0, 500),
+      one_line: String(r.one_line || "").substring(0, generation.oneLineMaxChars),
+      fit_notes: String(r.fit_notes || "").substring(0, generation.fitNotesMaxChars),
     }));
   } catch (e) {
     console.error(`[colibri] JSON parse error: ${e.message}`);

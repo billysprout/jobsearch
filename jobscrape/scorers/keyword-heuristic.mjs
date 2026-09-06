@@ -18,7 +18,7 @@ import { heuristicRankings } from "../colibri.mjs";
 import { attachPostings } from "../pipeline/render.mjs";
 
 export function init(cfg) {
-  return { tracks: cfg.tracks };
+  return { tracks: cfg.tracks, scoring: cfg.scoring.keyword };
 }
 
 export async function score(postings, params, ctx) {
@@ -29,7 +29,7 @@ export async function score(postings, params, ctx) {
   }
 
   const map = new Map(postings.map(p => [p.id, p]));
-  const rankings = attachPostings(heuristicRankings(postings, params.tracks), map);
+  const rankings = attachPostings(heuristicRankings(postings, params.tracks, params.scoring), map);
   await ctx.onRanked(rankings, ctx.first ? postings : []);
   return { rankings, deferred: [], missed: [], online: false };
 }

@@ -19,11 +19,12 @@ export function init(cfg) {
   return {
     threshold: cfg.colibri.heuristicSkipThreshold,
     tracks: cfg.tracks,
+    scoring: cfg.scoring.keyword,
   };
 }
 
 export async function score(postings, params, ctx) {
-  const { threshold, tracks } = params;
+  const { threshold, tracks, scoring } = params;
 
   if (typeof threshold !== "number") {
     return { rankings: [], deferred: [], missed: postings, online: true };
@@ -31,7 +32,7 @@ export async function score(postings, params, ctx) {
 
   const scored = postings.map(p => ({
     posting: p,
-    ...bestTrackScore(`${p.title} ${p.company} ${p.bodyText}`.toLowerCase(), tracks),
+    ...bestTrackScore(`${p.title} ${p.company} ${p.bodyText}`.toLowerCase(), tracks, scoring),
   }));
   const preGated = scored.filter(s => s.score >= threshold).map(s => s.posting);
   const toRank = scored.filter(s => s.score < threshold).map(s => s.posting);
@@ -41,7 +42,7 @@ export async function score(postings, params, ctx) {
   console.error(`[main] ${preGated.length} candidate(s) skip colibri (heuristic score >= ${threshold}), ${toRank.length} sent to colibri`);
 
   const rankings = attachPostings(
-    heuristicRankings(preGated, tracks).map(r => ({
+    heuristicRankings(preGated, tracks, scoring).map(r => ({
       ...r,
       fit_notes: `${r.fit_notes} — skipped colibri, high-confidence keyword match (>= ${threshold})`,
     })),

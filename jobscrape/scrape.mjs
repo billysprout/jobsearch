@@ -210,8 +210,8 @@ async function main() {
     state.saveTodayRankings(stamp, allTodayRankings, STATE_DIR);
 
     const latestDigestMd = renderDigest(stamp, allTodayRankings, COLIBRI_IN_CHAIN, config);
-    const latestSummaryJson = renderSummaryJson(allTodayRankings);
-    const cards = newRankings.map(r => ({ id: r.id, content: renderCard(r) }));
+    const latestSummaryJson = renderSummaryJson(allTodayRankings, config.output.topNPerTrack);
+    const cards = newRankings.map(r => ({ id: r.id, content: renderCard(r, config.output.cardExcerptChars) }));
     await writeToVolume(latestDigestMd, cards, stamp, latestSummaryJson, []);
     console.error(`[main] streamed ${newRankings.length} new ranking(s) to digest (${allTodayRankings.length} total today)`);
   }
@@ -237,7 +237,7 @@ async function main() {
     remaining = result.missed;
   }
 
-  if (!DRY_RUN) state.pruneOldDigestState(7, STATE_DIR);
+  if (!DRY_RUN) state.pruneOldDigestState(config.output.digestStatePruneDays, STATE_DIR);
 
   // 6. Drafting (opt-in, unaffected by streaming) + final summary. The
   // digest itself is already fully up to date on the volume via
@@ -252,7 +252,7 @@ async function main() {
     if (drafts.length) {
       await writeToVolume(
         renderDigest(stamp, allTodayRankings, COLIBRI_IN_CHAIN, config),
-        [], stamp, renderSummaryJson(allTodayRankings), drafts,
+        [], stamp, renderSummaryJson(allTodayRankings, config.output.topNPerTrack), drafts,
       );
       console.error(`[main] wrote ${drafts.length} draft(s)`);
     }

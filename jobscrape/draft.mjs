@@ -56,7 +56,7 @@ export async function draftCoverLetter(config, profile, posting) {
     `Job posting:`,
     `${posting.company} — ${posting.title}`,
     `Location: ${posting.location || "N/A"}`,
-    (posting.bodyText || "").substring(0, 2000),
+    (posting.bodyText || "").substring(0, config.draft.bodyExcerptChars),
   ].join("\n");
 
   const controller = new AbortController();
@@ -72,8 +72,8 @@ export async function draftCoverLetter(config, profile, posting) {
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: userPrompt },
         ],
-        max_tokens: 512,
-        temperature: 0.4,
+        max_tokens: config.draft.maxTokens,
+        temperature: config.draft.temperature,
         stream: true,
       }),
       signal: controller.signal,

@@ -1,7 +1,14 @@
 // sources.mjs — job board fetchers, all normalizing to a common shape.
 // Zero external deps — built-in fetch + text parsing only.
+// Request parameters (User-Agent, optional timeout) come from config.fetch —
+// timeoutMs: null (the default) issues requests exactly as before.
 
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+/** All URLs go through here so config.fetch applies uniformly. */
+function fetchPage(url, fetchCfg) {
+  const opts = { headers: { "User-Agent": fetchCfg.userAgent } };
+  if (fetchCfg.timeoutMs != null) opts.signal = AbortSignal.timeout(fetchCfg.timeoutMs);
+  return fetch(url, opts);
+}
 
 /** @typedef {{ source: string, id: string, url: string, company: string, title: string, location: string, salary: string, bodyText: string, postedAt?: string }} Posting */
 
@@ -13,37 +20,38 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 export async function fetchAll(config) {
   const results = [];
   const src = config.sources;
+  const fetchCfg = config.fetch;
 
   if (src.remoteok?.enabled) {
-    try { results.push(...await fetchRemoteOK()); } catch (e) { console.error("[sources] remoteok error:", e.message); }
+    try { results.push(...await fetchRemoteOK(fetchCfg)); } catch (e) { console.error("[sources] remoteok error:", e.message); }
   }
   if (src.remotive?.enabled) {
-    try { results.push(...await fetchRemotive()); } catch (e) { console.error("[sources] remotive error:", e.message); }
+    try { results.push(...await fetchRemotive(fetchCfg)); } catch (e) { console.error("[sources] remotive error:", e.message); }
   }
   if (src.wwr?.enabled) {
-    try { results.push(...await fetchWWR(config.wwr.categories)); } catch (e) { console.error("[sources] wwr error:", e.message); }
+    try { results.push(...await fetchWWR(config.wwr.categories, fetchCfg)); } catch (e) { console.error("[sources] wwr error:", e.message); }
   }
   if (src.hn?.enabled) {
-    try { results.push(...await fetchHN()); } catch (e) { console.error("[sources] hn error:", e.message); }
+    try { results.push(...await fetchHN(fetchCfg)); } catch (e) { console.error("[sources] hn error:", e.message); }
   }
   if (src.greenhouse?.enabled) {
     for (const [slug, meta] of Object.entries(config.ats.greenhouse)) {
-      try { results.push(...await fetchGreenhouse(slug, meta.label)); } catch (e) { console.error(`[sources] greenhouse/${slug} error:`, e.message); }
+      try { results.push(...await fetchGreenhouse(slug, meta.label, fetchCfg)); } catch (e) { console.error(`[sources] greenhouse/${slug} error:`, e.message); }
     }
   }
   if (src.lever?.enabled) {
     for (const [slug, meta] of Object.entries(config.ats.lever)) {
-      try { results.push(...await fetchLever(slug, meta.label)); } catch (e) { console.error(`[sources] lever/${slug} error:`, e.message); }
+      try { results.push(...await fetchLever(slug, meta.label, fetchCfg)); } catch (e) { console.error(`[sources] lever/${slug} error:`, e.message); }
     }
   }
   if (src.workable?.enabled) {
     for (const [slug, meta] of Object.entries(config.ats.workable)) {
-      try { results.push(...await fetchWorkable(slug, meta.label)); } catch (e) { console.error(`[sources] workable/${slug} error:`, e.message); }
+      try { results.push(...await fetchWorkable(slug, meta.label, fetchCfg)); } catch (e) { console.error(`[sources] workable/${slug} error:`, e.message); }
     }
   }
   if (src.ashby?.enabled) {
     for (const [slug, meta] of Object.entries(config.ats.ashby)) {
-      try { results.push(...await fetchAshby(slug, meta.label)); } catch (e) { console.error(`[sources] ashby/${slug} error:`, e.message); }
+      try { results.push(...await fetchAshby(slug, meta.label, fetchCfg)); } catch (e) { console.error(`[sources] ashby/${slug} error:`, e.message); }
     }
   }
 
@@ -52,8 +60,8 @@ export async function fetchAll(config) {
 }
 
 // --- RemoteOK ---
-async function fetchRemoteOK() {
-  const res = await fetch("https://remoteok.com/api", { headers: { "User-Agent": UA } });
+async function fetchRemoteOK(fetchCfg) {
+  const res = await fetchPage("https://remoteok.com/api", fetchCfg);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   // [0] is a legal/credit object, skip it
@@ -74,8 +82,8 @@ async function fetchRemoteOK() {
 }
 
 // --- Remotive ---
-async function fetchRemotive() {
-  const res = await fetch("https://remotive.com/api/remote-jobs", { headers: { "User-Agent": UA } });
+async function fetchRemotive(fetchCfg) {
+  const res = await fetchPage("https://remotive.com/api/remote-jobs", fetchCfg);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   const jobs = data.jobs || [];
@@ -95,11 +103,11 @@ async function fetchRemotive() {
 }
 
 // --- We Work Remotely (RSS) ---
-async function fetchWWR(categories) {
+async function fetchWWR(categories, fetchCfg) {
   const all = [];
   for (const cat of categories) {
     const rssUrl = `https://weworkremotely.com/categories/${cat}.rss`;
-    const res = await fetch(rssUrl, { headers: { "User-Agent": UA } });
+    const res = await fetchPage(rssUrl, fetchCfg);
     if (!res.ok) { console.error(`[sources] wwr/${cat} HTTP ${res.status}, skipping`); continue; }
     const xml = await res.text();
     // Minimal RSS parser — extract <item> blocks via regex
@@ -127,18 +135,19 @@ async function fetchWWR(categories) {
 }
 
 // --- Hacker News (Who is Hiring) ---
-async function fetchHN() {
+async function fetchHN(fetchCfg) {
+  const hn = fetchCfg.hn;
   // Find latest "Ask HN: Who is Hiring" story via Algolia
   const searchUrl = "https://hn.algolia.com/api/v1/search?query=Ask%20HN%3A%20Who%20is%20hiring&tags=story&hitsPerPage=1";
-  const res = await fetch(searchUrl, { headers: { "User-Agent": UA } });
+  const res = await fetchPage(searchUrl, fetchCfg);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   const story = data.hits?.[0];
   if (!story) return [];
 
   // Fetch top-level comments (children) of the story
-  const commentsUrl = `https://hn.algolia.com/api/v1/search?tags=comment,story_${story.objectID}&hitsPerPage=200`;
-  const cRes = await fetch(commentsUrl, { headers: { "User-Agent": UA } });
+  const commentsUrl = `https://hn.algolia.com/api/v1/search?tags=comment,story_${story.objectID}&hitsPerPage=${hn.hitsPerPage}`;
+  const cRes = await fetchPage(commentsUrl, fetchCfg);
   if (!cRes.ok) return [];
   const cData = await cRes.json();
   const comments = cData.hits || [];
@@ -156,25 +165,25 @@ async function fetchHN() {
       const text = c.comment_text || "";
       const urls = text.match(urlRe) || [];
       // Extract company from first line (often "COMPANY - City" or "| COMPANY")
-      const firstLine = text.split("\n")[0].substring(0, 120);
+      const firstLine = text.split("\n")[0].substring(0, hn.firstLineMaxChars);
       return {
         source: "hn",
         id: `hn-${c.objectID}`,
         url: urls[0] || `https://news.ycombinator.com/item?id=${c.objectID}`,
-        company: firstLine.replace(/[|\-–—]/g, " ").trim().substring(0, 60),
+        company: firstLine.replace(/[|\-–—]/g, " ").trim().substring(0, hn.companyMaxChars),
         title: "Who is Hiring (HN)",
         location: "",
         salary: "",
-        bodyText: text.substring(0, 3000),
+        bodyText: text.substring(0, hn.maxBodyChars),
         postedAt: c.created_at,
       };
     });
 }
 
 // --- Greenhouse ---
-async function fetchGreenhouse(slug, label) {
+async function fetchGreenhouse(slug, label, fetchCfg) {
   const url = `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=true`;
-  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  const res = await fetchPage(url, fetchCfg);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   const jobs = data.jobs || [];
@@ -198,9 +207,9 @@ async function fetchGreenhouse(slug, label) {
 }
 
 // --- Lever ---
-async function fetchLever(slug, label) {
+async function fetchLever(slug, label, fetchCfg) {
   const url = `https://api.lever.co/v0/postings/${slug}?mode=json`;
-  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  const res = await fetchPage(url, fetchCfg);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   // Lever wraps postings in an object keyed by team name
@@ -223,9 +232,9 @@ async function fetchLever(slug, label) {
 // Public "widget" API — same one job-board aggregators use, no API key.
 // Slug = the account name in apply.workable.com/{slug}/. Verify a slug works:
 // curl https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true
-async function fetchWorkable(slug, label) {
+async function fetchWorkable(slug, label, fetchCfg) {
   const url = `https://apply.workable.com/api/v1/widget/accounts/${slug}?details=true`;
-  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  const res = await fetchPage(url, fetchCfg);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   const jobs = data.jobs || [];
@@ -248,9 +257,9 @@ async function fetchWorkable(slug, label) {
 // Public Job Board API (documented: developers.ashbyhq.com/docs/public-job-posting-api).
 // Slug = the job board name in jobs.ashbyhq.com/{slug}. Verify a slug works:
 // curl https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true
-async function fetchAshby(slug, label) {
+async function fetchAshby(slug, label, fetchCfg) {
   const url = `https://api.ashbyhq.com/posting-api/job-board/${slug}?includeCompensation=true`;
-  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  const res = await fetchPage(url, fetchCfg);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   const jobs = data.jobs || [];

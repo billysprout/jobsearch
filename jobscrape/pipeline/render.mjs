@@ -47,7 +47,7 @@ export function renderDigest(dateStr, ranked, colibriOnline, config) {
     md += `|------:|---------|-------|----------|-----|\n`;
     for (const r of items) {
       const posting = r._posting;
-      md += `| ${r.score} | ${esc(posting.company)} | [${esc(posting.title)}](${posting.url}) | ${esc(posting.location)} | ${esc(r.one_line)} |\n`;
+      md += `| ${r.score} | ${esc(posting.company, config.output.tableCellChars)} | [${esc(posting.title, config.output.tableCellChars)}](${posting.url}) | ${esc(posting.location, config.output.tableCellChars)} | ${esc(r.one_line, config.output.tableCellChars)} |\n`;
     }
     md += `\n`;
   }

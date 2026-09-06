@@ -148,7 +148,7 @@ async function tailorResume(config, { resume, profile, posting }) {
     "JOB DESCRIPTION:",
     `${posting.company} — ${posting.title}`,
     `Location: ${posting.location || "N/A"}`,
-    (posting.bodyText || "").substring(0, 8000),
+    (posting.bodyText || "").substring(0, config.tailor.bodyExcerptChars),
   ].join("\n");
 
   const controller = new AbortController();
@@ -164,9 +164,10 @@ async function tailorResume(config, { resume, profile, posting }) {
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: userPrompt },
         ],
-        // A full two-page resume is the output — far beyond draft.mjs's 512.
-        max_tokens: 4096,
-        temperature: 0.3,
+        // A full two-page resume is the output — far beyond a cover letter
+        // (config.tailor.maxTokens vs config.draft.maxTokens).
+        max_tokens: config.tailor.maxTokens,
+        temperature: config.tailor.temperature,
         stream: true,
       }),
       signal: controller.signal,
