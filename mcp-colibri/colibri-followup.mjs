@@ -1,5 +1,5 @@
 // colibri-followup.mjs — checks mcp-colibri for ask_colibri jobs that
-// finished but were never confirmed delivered, and pushes them to WhatsApp
+// finished but were never confirmed delivered, and pushes them to Telegram
 // directly via this gateway's own CLI. Deliberately NOT an agent turn: no
 // LLM involved, so it can stay completely silent when there's nothing
 // pending instead of always producing some text a cron "announce" would
@@ -12,8 +12,10 @@
 import { execFileSync } from "node:child_process";
 
 const MCP_URL = process.env.COLIBRI_MCP_URL || "http://mcp-colibri:3000";
-const TARGET = process.env.COLIBRI_NOTIFY_TARGET || "+18604026205";
-const CHANNEL = process.env.COLIBRI_NOTIFY_CHANNEL || "whatsapp";
+// Telegram target is the operator's numeric chat ID (same value as the
+// channel's allowFrom — @usernames are not valid send targets).
+const TARGET = process.env.COLIBRI_NOTIFY_TARGET || "8953024654";
+const CHANNEL = process.env.COLIBRI_NOTIFY_CHANNEL || "telegram";
 
 async function main() {
   const res = await fetch(`${MCP_URL}/pending`);

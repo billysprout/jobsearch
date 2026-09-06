@@ -75,7 +75,7 @@ to the digest as soon as colibri returns it (`persistAndPublish` in `scrape.mjs`
 through `colibri.mjs`'s `rankPostings(..., onChunkRanked)` callback) rather than
 accumulating everything in memory and writing once at the end. A timeout at any point loses
 at most the one chunk in flight — everything ranked before that is already on the
-WhatsApp-visible digest, `state/seen.json`, and `state/digest-<date>.json`. `--dry-run`
+digest, `state/seen.json`, and `state/digest-<date>.json`. `--dry-run`
 still writes nothing at all, as before.
 
 ## Colibri offline behavior
@@ -188,14 +188,21 @@ wearing a job-scraper's clothes, a different kind of tool than "finds and
 ranks postings." If it's wanted later it deserves its own scoped design
 rather than growing out of `seen.json` as a side effect.
 
-## Digest push to WhatsApp
+## Digest push
 
-`digest-notify.mjs` reads today's `digest/<date>-summary.json` (written by
-`scrape.mjs` every run) and pushes the top postings per track to WhatsApp,
-mirroring `mcp-colibri/colibri-followup.mjs`'s pattern: a plain script, no
-LLM turn, silent when there's nothing new. It runs **inside the gateway
-container** (needs the gateway's own CLI + token to send), not on the host —
-see the deployment/cron-registration notes in the file's header comment.
+The live daily checkin is OpenClaw's own `job-digest` cron (`docker compose run
+--rm cli cron list`): an isolated agent turn reads the newest
+`digest/<date>-summary.json` and OpenClaw announces the turn's output to the
+configured channel — **Telegram** since 2026-08-28 (`telegram:8953024654`,
+previously WhatsApp).
+
+`digest-notify.mjs` is a scripted alternative that isn't currently registered
+as a cron job: a plain script, no LLM turn, silent when there's nothing new
+(mirrors `mcp-colibri/colibri-followup.mjs`). It reads today's
+`digest/<date>-summary.json` and pushes the top postings per track itself,
+with Telegram defaults now too. It runs **inside the gateway container**
+(needs the gateway's own CLI + token to send), not on the host — see the
+deployment/cron-registration notes in the file's header comment.
 
 ## Coordinating with `ask_colibri`
 
@@ -219,7 +226,7 @@ infrastructure that isn't there.
 | `pdf.mjs` | Shared PDF renderer (pdfkit) — cover letters and the resume, format-only, no AI |
 | `render-resume.mjs` | Renders `profile.md` → `resume.pdf`, pushes to the workspace volume root |
 | `volume-writer.mjs` | Shared tar-pipe-into-docker-volume writer, used by `scrape.mjs` and `render-resume.mjs` |
-| `digest-notify.mjs` | WhatsApp digest push (deployed into the gateway container — see its header) |
+| `digest-notify.mjs` | Standalone digest push script, Telegram defaults (dormant — the `job-digest` agent-turn cron is the live checkin) |
 | `config.json` | Tracks, keywords, ATS slugs, WWR categories, caps |
 | `package.json` | npm deps (currently just `pdfkit`) — run `npm install` once |
 | `profile.md` | Your actual background (gitignored, same as `.env`) — copy from `profile.example.md` |

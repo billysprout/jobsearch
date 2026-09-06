@@ -1,4 +1,4 @@
-// digest-notify.mjs — pushes today's job digest summary to WhatsApp.
+// digest-notify.mjs — pushes today's job digest summary to Telegram.
 //
 // Mirrors mcp-colibri/colibri-followup.mjs's shape deliberately: a plain
 // script, no LLM turn involved, silent when there's nothing new to report
@@ -31,8 +31,10 @@ import { dirname, join } from "node:path";
 import { stripEmDash } from "./text-filter.mjs";
 
 const DIGEST_DIR = process.env.JOBS_DIGEST_DIR || "/home/node/.openclaw/workspace/jobs/digest";
-const TARGET = process.env.COLIBRI_NOTIFY_TARGET || "+18604026205";
-const CHANNEL = process.env.COLIBRI_NOTIFY_CHANNEL || "whatsapp";
+// Telegram target is the operator's numeric chat ID (same value as the
+// channel's allowFrom — @usernames are not valid send targets).
+const TARGET = process.env.COLIBRI_NOTIFY_TARGET || "8953024654";
+const CHANNEL = process.env.COLIBRI_NOTIFY_CHANNEL || "telegram";
 const TOP_N = parseInt(process.env.JOBS_NOTIFY_TOP_N || "5", 10);
 // One-line marker of the last date already notified, so re-running this
 // script later the same day (e.g. a second manual jobscrape run) doesn't

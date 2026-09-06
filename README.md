@@ -47,7 +47,9 @@ itself is enforced (wrong token → `unauthorized`); see SECURITY-REVIEW.md §5.
 
 ## WhatsApp channel
 
-**Status: LIVE** (linked 2026-08-23). Single-operator DM allowlist + daily job digest via cron.
+**Status: LIVE** (linked 2026-08-23). Single-operator DM allowlist. The daily job
+digest used to deliver here via cron — moved to Telegram 2026-08-28 (see that
+section below); WhatsApp itself stays linked and unchanged.
 Full threat-model notes: SECURITY-REVIEW.md §3 row 15, §4 R9–R13.
 
 ```bash
@@ -100,6 +102,12 @@ note above) hit a same-day account restriction with no clean appeal path. Unlike
 OpenClaw has a **native, bundled Telegram channel plugin** — no custom plugin code
 needed — and the bot token came from @BotFather in about a minute, no business
 verification.
+
+**Digest delivery moved here (2026-08-28)**: the daily `job-digest` checkin cron
+(an isolated agent turn reading the newest `jobs/digest/` file) now announces to
+Telegram — `cli cron edit <id> --channel telegram --to 8953024654` (the allowlisted
+user ID, same value as `allowFrom`). Delivery target only; nothing about the
+channel config or egress changed.
 
 **No ingress needed**: this channel runs OpenClaw's default **long polling** transport
 (grammY runner) — no public URL, no webhook, no Tailscale Funnel mapping, nothing inbound
@@ -444,11 +452,12 @@ having some cron "announce" mechanism deliver a "nothing to report" message ever
 run by a `--command`-payload cron job (`colibri-followup`, every 10 min, `delivery.mode:
 none` set explicitly since cron auto-sets `announce` by default even for command
 payloads). It checks `mcp-colibri`'s `/pending` endpoint (done-but-undelivered jobs) and
-delivers via `node dist/index.js message send --channel whatsapp ...` directly from
+delivers via `node dist/index.js message send --channel telegram ...` directly from
 inside the gateway container, which already has the gateway token as an env var — no new
-credential surface. Deliberately does **not** mark a job delivered just because
+credential surface. (Channel switched from WhatsApp to Telegram 2026-08-30, along with
+the `job-digest` checkin — see the Telegram section.) Deliberately does **not** mark a job delivered just because
 `check_colibri` read it in-turn (the agent seeing a result doesn't guarantee it survives
-to reach the user, per bug 1) — only a confirmed WhatsApp send acks a job. Worst case on
+to reach the user, per bug 1) — only a confirmed Telegram send acks a job. Worst case on
 the happy path: a mild duplicate message, which beats a silently lost result.
 
 **Bug 3 — `stream: false` silently starves the connection.** Even after the fire-and-poll
