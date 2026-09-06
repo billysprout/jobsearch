@@ -15,3 +15,6 @@ jobscrape/resume.md
 
 # scratch space — working notes, not durable docs
 scratch/
+
+# parity fixture: regenerated on every record/replay run — not part of the frozen fixture
+jobscrape/test/fixtures/parity/state/last-run-*.json

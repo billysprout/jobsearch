@@ -92,7 +92,12 @@ const config = loadConfig({ profile: PROFILE });
 const DRY_RUN = DRY_RUN_FLAG || config.run.dryRun;
 const LIMIT = LIMIT_FLAG ?? config.selection.limit;
 const DRAFTS = HAS_DRAFTS ? (DRAFTS_VALUE || config.run.draftDefaultCount) : 0;
-const STATE_DIR = resolve(__dirname, "state");
+// JOBSCRAPE_STATE_DIR: test seam — the parity test runs against a frozen
+// state snapshot so golden diffs measure code drift, not live seen.json
+// growth. Production runs never set it.
+const STATE_DIR = process.env.JOBSCRAPE_STATE_DIR
+  ? resolve(process.env.JOBSCRAPE_STATE_DIR)
+  : resolve(__dirname, "state");
 const STAGING_DIR = resolve(__dirname, "staging");
 
 // Curated ATS sources (companies we deliberately picked) rank ahead of

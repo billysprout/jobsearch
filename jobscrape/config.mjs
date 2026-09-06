@@ -456,11 +456,12 @@ function availableProfiles(dir) {
 
 /**
  * @param {{ dir?: string, profile?: string }} [opts] — dir holding configs/
- *   (default: this module's directory); profile name override. Tests pass a
- *   fixture dir.
+ *   (default: JOBSCRAPE_CONFIG_DIR env, else this module's directory);
+ *   profile name override. The env + opts exist for tests/deployments that
+ *   keep configs outside the source tree.
  */
 export function loadConfig(opts = {}) {
-  const dir = opts.dir || __dirname;
+  const dir = opts.dir || process.env.JOBSCRAPE_CONFIG_DIR || __dirname;
   const profile = opts.profile ?? process.env.JOBSCRAPE_PROFILE ?? "production";
 
   if (profile && /[\\/]|\.\./.test(profile)) {
