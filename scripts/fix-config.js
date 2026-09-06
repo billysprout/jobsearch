@@ -47,5 +47,15 @@ cfg.mcp.servers['salary'] = {
   requestTimeoutMs: 30000
 };
 
+// Job-scrape configuration MCP (mcp-jobscrape container) — thin proxy to the
+// host-side config-server.mjs, local and fast like salary.
+cfg.mcp.servers['jobscrape'] = {
+  url: 'http://mcp-jobscrape:3000/sse',
+  transport: 'sse',
+  enabled: true,
+  connectionTimeoutMs: 10000,
+  requestTimeoutMs: 15000
+};
+
 fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
-console.log('Config updated: coli-local provider + 900s timeout + mcp.servers.colibri');
+console.log('Config updated: coli-local provider + 900s timeout + mcp.servers.colibri/salary/jobscrape');

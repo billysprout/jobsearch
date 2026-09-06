@@ -65,7 +65,7 @@ services:
       NODE_USE_ENV_PROXY: "1"
       HTTP_PROXY: http://egress:3128
       HTTPS_PROXY: http://egress:3128
-      NO_PROXY: localhost,127.0.0.1,mcp-colibri,mcp-salary
+      NO_PROXY: localhost,127.0.0.1,mcp-colibri,mcp-salary,mcp-jobscrape
       TZ: ${OPENCLAW_TZ:-UTC}
     # host.docker.internal resolves to the Windows host so the agent can reach a
     # locally-running colibri model server (plain HTTP, port 8000). Traffic still
@@ -217,6 +217,45 @@ services:
       LOG_LEVEL: "info"
       # Force BLS requests through the squid allowlist proxy (same forced-proxy
       # pattern as mcp-colibri; fail-closed if the env vars are ignored).
+      NODE_USE_ENV_PROXY: "1"
+      HTTP_PROXY: http://egress:3128
+      HTTPS_PROXY: http://egress:3128
+      NO_PROXY: localhost,127.0.0.1
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    mem_limit: 128m
+    cpus: "0.25"
+    pids_limit: 32
+    depends_on: [egress]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ------------------------------------------------------ mcp-jobscrape -----
+  # Agent-driven configuration for the host-side job scraper: the agent maps a
+  # non-technical user's chat requests ("block Acme", "only recent postings")
+  # onto typed tools that proxy to config-server.mjs on the HOST
+  # (host.docker.internal:8790, token-gated — see jobscrape/config-server.mjs).
+  # Host reachability + forced-proxy wiring mirror mcp-colibri (extra_hosts +
+  # squid allowlist by domain); hardening mirrors mcp-salary. The token is
+  # config-write power — it lives in .env, never committed.
+  mcp-jobscrape:
+    build: ./mcp-jobscrape
+    image: mcp-jobscrape:local
+    networks: [internal]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      JOBSCRAPE_CONFIG_URL: http://host.docker.internal:8790
+      JOBSCRAPE_CONFIG_TOKEN: ${JOBSCRAPE_CONFIG_TOKEN}
+      LOG_LEVEL: "info"
       NODE_USE_ENV_PROXY: "1"
       HTTP_PROXY: http://egress:3128
       HTTPS_PROXY: http://egress:3128

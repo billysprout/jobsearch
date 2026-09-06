@@ -1,0 +1,14 @@
+{
+  "name": "mcp-jobscrape",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "MCP tool server letting the agent configure jobscrape conversationally (proxies to the host-side config-server.mjs)",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.23.0"
+  }
+}
