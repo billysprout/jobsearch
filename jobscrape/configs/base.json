@@ -1,4 +1,6 @@
 {
+  "workspaceVolume": "openclaw-sandbox_openclaw-workspace",
+  "workspacePath": "/home/node/.openclaw/workspace/jobs",
   "colibri": {
     "baseUrl": "http://localhost:8000/v1",
     "model": "glm-5.2-colibri",
@@ -7,10 +9,9 @@
     "heuristicSkipThreshold": 70,
     "mcpHealthUrl": "http://127.0.0.1:8090/health"
   },
-  "workspaceVolume": "openclaw-sandbox_openclaw-workspace",
-  "workspacePath": "/home/node/.openclaw/workspace/jobs",
-  "dailyCap": 40,
-  "perCompanyMax": 3,
+  "selection": {
+    "perCompanyMax": 3
+  },
   "tracks": {
     "esports": {
       "label": "Esports / Gaming Ops",

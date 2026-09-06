@@ -63,25 +63,35 @@ import { loadConfig } from "./config.mjs";
 // --- CLI ---
 const args = process.argv.slice(2);
 const ONCE = args.includes("--once");
-const DRY_RUN = args.includes("--dry-run");
+const DRY_RUN_FLAG = args.includes("--dry-run");
 const NO_COLIBRI = args.includes("--no-colibri");
+// --profile <name>: overlays configs/<name>.json on configs/base.json.
+// Precedence: this flag > JOBSCRAPE_PROFILE env > "production".
+const profileIdx = args.indexOf("--profile");
+const PROFILE = profileIdx !== -1 ? args[profileIdx + 1] : undefined;
+// Numeric flags parse early but resolve against config defaults below (a
+// flag value always wins; an absent flag takes the config value).
 const limitIdx = args.indexOf("--limit");
-const LIMIT = limitIdx !== -1 ? Number(args[limitIdx + 1]) || 40 : 40;
+const LIMIT_FLAG = limitIdx !== -1 ? (Number(args[limitIdx + 1]) || undefined) : undefined;
 // --drafts [N]: opt-in cover-letter drafting for the top N postings by score
-// (default 3 if the flag is present with no number). Needs colibri and
+// (config default if the flag is present with no number). Needs colibri and
 // jobscrape/profile.md — see draft.mjs. Off by default: it's extra colibri
 // calls on top of ranking, and colibri throughput is already the reason
 // --limit is capped at 10 in production (see register-task.ps1).
 const draftsIdx = args.indexOf("--drafts");
-const DRAFTS = draftsIdx !== -1 ? (Number(args[draftsIdx + 1]) || 3) : 0;
+const HAS_DRAFTS = draftsIdx !== -1;
+const DRAFTS_VALUE = HAS_DRAFTS ? Number(args[draftsIdx + 1]) : 0;
 
 if (!ONCE) {
-  console.error("Usage: node scrape.mjs --once [--dry-run] [--limit N] [--no-colibri] [--drafts [N]]");
+  console.error("Usage: node scrape.mjs --once [--profile NAME] [--dry-run] [--limit N] [--no-colibri] [--drafts [N]]");
   process.exit(1);
 }
 
 // --- Config ---
-const config = loadConfig();
+const config = loadConfig({ profile: PROFILE });
+const DRY_RUN = DRY_RUN_FLAG || config.run.dryRun;
+const LIMIT = LIMIT_FLAG ?? config.selection.limit;
+const DRAFTS = HAS_DRAFTS ? (DRAFTS_VALUE || config.run.draftDefaultCount) : 0;
 const STATE_DIR = resolve(__dirname, "state");
 const STAGING_DIR = resolve(__dirname, "staging");
 

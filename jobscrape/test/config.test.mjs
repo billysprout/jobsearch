@@ -152,25 +152,89 @@ test("open maps accept new user content without erroring", () => {
   assert.ok(cfg.tracks.brandnew);
 });
 
-test("loadConfig reads the real repo config.json (alias path)", () => {
-  // The repo's config.json still uses the pre-selection shape, so this also
-  // exercises the perCompanyMax alias end-to-end.
+test("loadConfig reads the real repo configs/ (base + production overlay)", () => {
   const cfg = loadConfig();
-  assert.equal(cfg.selection.perCompanyMax, 3);
+  assert.equal(cfg.selection.limit, 10, "production profile caps the run at 10");
+  assert.equal(cfg.selection.perCompanyMax, 3, "base.json selection value survives the overlay");
   assert.equal(cfg.colibri.model, "glm-5.2-colibri");
   assert.ok(Object.keys(cfg.tracks).length >= 3);
+});
+
+test("--profile flag wins over JOBSCRAPE_PROFILE, which wins over production", () => {
+  const dir = mkdtempSync(join(tmpdir(), "jobscrape-profiles-"));
+  try {
+    const configs = join(dir, "configs");
+    mkdirSync(configs, { recursive: true });
+    writeFileSync(join(configs, "base.json"), JSON.stringify({
+      tracks: MINIMAL.tracks, sources: MINIMAL.sources, selection: { limit: 1 },
+    }));
+    writeFileSync(join(configs, "production.json"), JSON.stringify({ selection: { limit: 2 } }));
+    writeFileSync(join(configs, "dev.json"), JSON.stringify({ selection: { limit: 3 } }));
+
+    assert.equal(loadConfig({ dir }).selection.limit, 2, "default profile is production");
+    process.env.JOBSCRAPE_PROFILE = "dev";
+    try {
+      assert.equal(loadConfig({ dir }).selection.limit, 3, "env var selects the profile");
+      assert.equal(loadConfig({ dir, profile: "base" }).selection.limit, 1, "flag beats env var");
+    } finally {
+      delete process.env.JOBSCRAPE_PROFILE;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("profile overlays replace arrays wholesale and merge objects", () => {
+  const dir = mkdtempSync(join(tmpdir(), "jobscrape-profile-arr-"));
+  try {
+    const configs = join(dir, "configs");
+    mkdirSync(configs, { recursive: true });
+    writeFileSync(join(configs, "base.json"), JSON.stringify({
+      tracks: MINIMAL.tracks,
+      sources: MINIMAL.sources,
+      scorers: ["keyword-gate", "colibri", "keyword-heuristic"],
+      selection: { limit: 9 },
+    }));
+    writeFileSync(join(configs, "dev.json"), JSON.stringify({
+      scorers: ["keyword-heuristic"],
+    }));
+
+    const dev = loadConfig({ dir, profile: "dev" });
+    assert.deepEqual(dev.scorers, ["keyword-heuristic"], "array replaced, not element-merged");
+    assert.equal(dev.selection.limit, 9, "base selection survives the profile");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("unknown profile names error with the available list; traversal is rejected", () => {
+  const dir = mkdtempSync(join(tmpdir(), "jobscrape-profile-err-"));
+  try {
+    const configs = join(dir, "configs");
+    mkdirSync(configs, { recursive: true });
+    writeFileSync(join(configs, "base.json"), JSON.stringify(MINIMAL));
+    writeFileSync(join(configs, "production.json"), JSON.stringify({}));
+
+    assert.throws(() => loadConfig({ dir, profile: "nope" }), /profile not found: configs\/nope\.json \(available: base, production\)/);
+    assert.throws(() => loadConfig({ dir, profile: "../etc" }), /invalid profile name/);
+    assert.throws(() => loadConfig({ dir, profile: "a\\b" }), /invalid profile name/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("loadConfig reads a fixture dir and errors on a bad file", () => {
   const dir = mkdtempSync(join(tmpdir(), "jobscrape-config-"));
   try {
-    writeFileSync(join(dir, "config.json"), JSON.stringify({
+    const configs = join(dir, "configs");
+    mkdirSync(configs, { recursive: true });
+    writeFileSync(join(configs, "base.json"), JSON.stringify({
       tracks: MINIMAL.tracks, sources: MINIMAL.sources, selection: { limit: 7 },
     }));
-    assert.equal(loadConfig({ dir }).selection.limit, 7);
+    assert.equal(loadConfig({ dir, profile: "base" }).selection.limit, 7);
 
-    writeFileSync(join(dir, "config.json"), "{ not json");
-    assert.throws(() => loadConfig({ dir }), ConfigError);
+    writeFileSync(join(configs, "base.json"), "{ not json");
+    assert.throws(() => loadConfig({ dir, profile: "base" }), ConfigError);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -181,7 +245,7 @@ test("loadConfig throws ConfigError on missing config file", () => {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   try {
-    assert.throws(() => loadConfig({ dir }), /config file not found/);
+    assert.throws(() => loadConfig({ dir, profile: "base" }), /config file not found/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

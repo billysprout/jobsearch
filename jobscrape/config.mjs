@@ -7,8 +7,8 @@
 //
 //   1. DEFAULTS — every tuning value the pipeline used to hardcode inline
 //      (score caps, excerpt lengths, prompt parameters, prune windows, ...)
-//      lives here as the canonical fallback. config.json only needs to carry
-//      the values worth seeing in a diff.
+//      lives here as the canonical fallback. configs/base.json only needs to
+//      carry the values worth seeing in a diff.
 //   2. deepMerge — profiles (commit 3: configs/<name>.json) layer over the
 //      base config. Plain objects merge recursively; ARRAYS REPLACE wholesale
 //      (a profile's `scorers: ["keyword-heuristic"]` must not inherit the
@@ -21,7 +21,7 @@
 // No dependencies: everything here is stdlib. Tests live in test/config.test.mjs
 // (`npm test`).
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -423,28 +423,62 @@ export function validateConfig(cfg) {
 }
 
 // ---------------------------------------------------------------------------
-// loadConfig — read config.json, apply legacy aliases, merge over DEFAULTS,
-// validate. Synchronous on purpose: every caller is a CLI entry point that
+// loadConfig — configs/base.json layered with a named profile, over DEFAULTS,
+// validated. Synchronous on purpose: every caller is a CLI entry point that
 // needs the config before anything async starts.
+//
+// Layering: DEFAULTS <- configs/base.json <- configs/<profile>.json
+// Profile precedence: --profile flag > JOBSCRAPE_PROFILE env > "production".
+// Pass profile "base" explicitly for base.json alone (pure defaults + base).
 // ---------------------------------------------------------------------------
 
-/**
- * @param {{ dir?: string }} [opts] — dir holding config.json (default: this
- *   module's directory). Tests pass a fixture dir.
- */
-export function loadConfig(opts = {}) {
-  const dir = opts.dir || __dirname;
-  const file = resolve(dir, "config.json");
+function readJsonFile(file) {
   if (!existsSync(file)) {
     throw new ConfigError(`config file not found: ${file}`);
   }
-
-  let raw;
   try {
-    raw = JSON.parse(readFileSync(file, "utf8"));
+    return JSON.parse(readFileSync(file, "utf8"));
   } catch (e) {
     throw new ConfigError(`failed to parse ${file}: ${e.message}`);
   }
+}
 
-  return validateConfig(deepMerge(DEFAULTS, applyLegacyAliases(raw)));
+function availableProfiles(dir) {
+  try {
+    return readdirSync(resolve(dir, "configs"))
+      .filter(f => f.endsWith(".json"))
+      .map(f => f.replace(/\.json$/, ""))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * @param {{ dir?: string, profile?: string }} [opts] — dir holding configs/
+ *   (default: this module's directory); profile name override. Tests pass a
+ *   fixture dir.
+ */
+export function loadConfig(opts = {}) {
+  const dir = opts.dir || __dirname;
+  const profile = opts.profile ?? process.env.JOBSCRAPE_PROFILE ?? "production";
+
+  if (profile && /[\\/]|\.\./.test(profile)) {
+    // Profile names are file names under configs/ — refuse anything that
+    // could climb out of that directory.
+    throw new ConfigError(`invalid profile name: "${profile}"`);
+  }
+
+  // Aliases apply to each file BEFORE merging, so a legacy spelling works
+  // the same whether it sits in base.json or in a profile.
+  let cfg = deepMerge(DEFAULTS, applyLegacyAliases(readJsonFile(resolve(dir, "configs", "base.json"))));
+  if (profile && profile !== "base") {
+    const file = resolve(dir, "configs", `${profile}.json`);
+    if (!existsSync(file)) {
+      throw new ConfigError(`profile not found: configs/${profile}.json (available: ${availableProfiles(dir).join(", ") || "none"})`);
+    }
+    cfg = deepMerge(cfg, applyLegacyAliases(readJsonFile(file)));
+  }
+
+  return validateConfig(cfg);
 }

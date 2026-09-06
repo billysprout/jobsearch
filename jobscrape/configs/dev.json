@@ -1,0 +1,14 @@
+{
+  "run": {
+    "dryRun": true
+  },
+  "selection": {
+    "limit": 5
+  },
+  "scorers": [
+    "keyword-heuristic"
+  ],
+  "fetch": {
+    "timeoutMs": 10000
+  }
+}
