@@ -91,6 +91,37 @@ function sourcePriority(source) {
   return SOURCE_PRIORITY[source] ?? 3;
 }
 
+// Round-robin across companies within each priority tier so no single
+// company (e.g. Riot with 129+ eligible postings) can consume all --limit
+// slots before other curated companies or generic boards get a look.
+// Before this fix the stable sort preserved fetch order within a tier,
+// meaning the first-listed greenhouse company in config got every slot
+// every day.
+function interleaveByCompany(postings, perCompanyMax) {
+  const tiers = {};
+  for (const p of postings) {
+    const pri = sourcePriority(p.source);
+    if (!tiers[pri]) tiers[pri] = new Map();
+    const key = `${p.source}:${p.company}`;
+    if (!tiers[pri].has(key)) tiers[pri].set(key, []);
+    tiers[pri].get(key).push(p);
+  }
+  const result = [];
+  for (const pri of Object.keys(tiers).sort((a, b) => a - b)) {
+    const queues = [...tiers[pri].values()];
+    const maxLen = Math.min(
+      Math.max(...queues.map(q => q.length)),
+      perCompanyMax,
+    );
+    for (let i = 0; i < maxLen; i++) {
+      for (const q of queues) {
+        if (i < q.length) result.push(q[i]);
+      }
+    }
+  }
+  return result;
+}
+
 // --- State (seen.json) ---
 const STATE_FILE = join(STATE_DIR, "seen.json");
 
@@ -374,7 +405,8 @@ async function main() {
   // postings (carried over from a prior colibri outage) go first — they're
   // the oldest work in the queue and get first claim on this run's budget.
   console.error("[main] step 4/6: prioritizing + capping...");
-  const sorted = [...freshMatched].sort((a, b) => sourcePriority(a.source) - sourcePriority(b.source));
+  const perCompanyMax = config.perCompanyMax ?? 3;
+  const sorted = interleaveByCompany(freshMatched, perCompanyMax);
   const combinedPool = [...pendingQueue.values(), ...sorted];
   const candidates = combinedPool.slice(0, LIMIT);
   console.error(`[main] ${candidates.length} candidates after priority sort + cap (${pendingQueue.size} pending + ${freshMatched.length} new-eligible)`);

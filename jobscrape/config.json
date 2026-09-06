@@ -10,6 +10,7 @@
   "workspaceVolume": "openclaw-sandbox_openclaw-workspace",
   "workspacePath": "/home/node/.openclaw/workspace/jobs",
   "dailyCap": 40,
+  "perCompanyMax": 3,
   "tracks": {
     "esports": {
       "label": "Esports / Gaming Ops",
@@ -81,14 +82,14 @@
       "pagerduty": { "label": "PagerDuty" },
       "newrelic": { "label": "New Relic" },
       "launchdarkly": { "label": "LaunchDarkly" },
-      "temporaltechnologies": { "label": "Temporal" },
       "figma": { "label": "Figma" },
       "airtable": { "label": "Airtable" },
       "brex": { "label": "Brex" },
       "mercury": { "label": "Mercury" },
       "gusto": { "label": "Gusto" },
       "asana": { "label": "Asana" },
-      "webflow": { "label": "Webflow" }
+      "webflow": { "label": "Webflow" },
+      "temporaltechnologies": { "label": "Temporal" }
     },
     "lever": {
       "eslgaming": { "label": "ESL" },
