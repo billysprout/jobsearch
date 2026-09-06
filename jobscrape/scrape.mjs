@@ -213,7 +213,7 @@ async function main() {
     state.saveTodayRankings(stamp, allTodayRankings, STATE_DIR);
 
     const latestDigestMd = renderDigest(stamp, allTodayRankings, COLIBRI_IN_CHAIN, config);
-    const latestSummaryJson = renderSummaryJson(allTodayRankings, config.output.topNPerTrack);
+    const latestSummaryJson = renderSummaryJson(allTodayRankings, config.output.topNPerTrack, config.tracks);
     const cards = newRankings.map(r => ({ id: r.id, content: renderCard(r, config.output.cardExcerptChars) }));
     await writeToVolume(latestDigestMd, cards, stamp, latestSummaryJson, []);
     console.error(`[main] streamed ${newRankings.length} new ranking(s) to digest (${allTodayRankings.length} total today)`);
@@ -255,7 +255,7 @@ async function main() {
     if (drafts.length) {
       await writeToVolume(
         renderDigest(stamp, allTodayRankings, COLIBRI_IN_CHAIN, config),
-        [], stamp, renderSummaryJson(allTodayRankings, config.output.topNPerTrack), drafts,
+        [], stamp, renderSummaryJson(allTodayRankings, config.output.topNPerTrack, config.tracks), drafts,
       );
       console.error(`[main] wrote ${drafts.length} draft(s)`);
     }

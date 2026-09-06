@@ -60,20 +60,22 @@ export function renderDigest(dateStr, ranked, colibriOnline, config) {
 // digest-notify.mjs (push notification) so it doesn't have to parse the
 // markdown table; kept separate from state/digest-<date>.json, which is
 // jobscrape's own accumulation state and isn't written to the workspace
-// volume at all.
-export function renderSummaryJson(ranked, topNPerTrack = 5) {
+// volume at all. track_label carries the config.tracks display label so
+// consumers (deployed as a single file) never need their own taxonomy copy.
+export function renderSummaryJson(ranked, topNPerTrack = 5, tracks = {}) {
   const byTrack = {};
   for (const r of ranked) {
     if (r.track === "none") continue;
     (byTrack[r.track] ||= []).push(r);
   }
   const out = [];
-  for (const items of Object.values(byTrack)) {
+  for (const [track, items] of Object.entries(byTrack)) {
     items.sort((a, b) => b.score - a.score);
     for (const r of items.slice(0, topNPerTrack)) {
       out.push({
         id: r.id,
         track: r.track,
+        track_label: tracks[track]?.label || track,
         score: r.score,
         company: r._posting.company,
         title: r._posting.title,

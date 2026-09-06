@@ -7,7 +7,8 @@
 //
 // Deployment: this file is source-of-truth here in the repo, but it RUNS
 // inside the gateway container (it needs the gateway's own CLI + token to
-// send WhatsApp messages, same as colibri-followup.mjs) — copy it into the
+// send messages, same as colibri-followup.mjs) and is deployed as a SINGLE
+// file — it must not import sibling repo modules — copy it into the
 // openclaw-workspace volume the same way scrape.mjs's writeToVolume tar-pipes
 // digest/postings in:
 //
@@ -28,7 +29,15 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { stripEmDash } from "./text-filter.mjs";
+
+// Inlined from text-filter.mjs (same bytes): the container deploy below
+// copies THIS FILE ONLY, so a ./text-filter.mjs import would 404 at runtime
+// inside the gateway — that was a latent breakage for as long as this file
+// imported across the deploy boundary.
+function stripEmDash(text) {
+  if (typeof text !== "string") return text;
+  return text.replace(/—/g, "-");
+}
 
 const DIGEST_DIR = process.env.JOBS_DIGEST_DIR || "/home/node/.openclaw/workspace/jobs/digest";
 // Telegram target is the operator's numeric chat ID (same value as the
@@ -42,11 +51,14 @@ const TOP_N = parseInt(process.env.JOBS_NOTIFY_TOP_N || "5", 10);
 // so there's no cheap "is this new" signal besides the date itself.
 const STATE_FILE = process.env.JOBS_NOTIFY_STATE_FILE || "/home/node/.openclaw/workspace/jobs/.last-notified";
 
-const TRACK_LABELS = {
-  esports: "Esports / Gaming Ops",
-  "it-devops": "IT / Sysadmin / DevOps",
-  "producer-pm": "Producer / Project Management",
-};
+// Track labels come from the summary JSON itself (r.track_label, written by
+// scrape.mjs's renderSummaryJson from config.tracks) — this file used to
+// hardcode its own TRACK_LABELS copy of the taxonomy, which silently drifted
+// stale the moment a track was added in config. The `|| r.track` fallback
+// covers summaries written before track_label existed.
+function trackLabel(r) {
+  return r.track_label || r.track;
+}
 
 function todayStamp() {
   return new Date().toISOString().slice(0, 10);
@@ -74,7 +86,7 @@ async function main() {
 
   let text = `Job digest — ${stamp}`;
   for (const [track, items] of Object.entries(byTrack)) {
-    text += `\n\n*${TRACK_LABELS[track] || track}*`;
+    text += `\n\n*${trackLabel(items[0])}*`;
     for (const r of items.slice(0, TOP_N)) {
       text += `\n${r.score} — ${r.company}: ${r.title}\n${r.url}`;
     }
