@@ -37,5 +37,15 @@ cfg.mcp.servers['colibri'] = {
   requestTimeoutMs: 600000
 };
 
+// Salary research MCP (mcp-salary container) — synchronous BLS fetches are
+// fast, so a modest timeout is correct here (unlike colibri's 600s).
+cfg.mcp.servers['salary'] = {
+  url: 'http://mcp-salary:3000/sse',
+  transport: 'sse',
+  enabled: true,
+  connectionTimeoutMs: 10000,
+  requestTimeoutMs: 30000
+};
+
 fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
 console.log('Config updated: coli-local provider + 900s timeout + mcp.servers.colibri');

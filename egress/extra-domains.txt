@@ -24,3 +24,9 @@ raw.githubusercontent.com
 # outbound sends both go through this single documented endpoint. Exact host,
 # no wildcard.
 api.telegram.org
+
+# --- Salary research (mcp-salary container), added 2026-09 ---
+# BLS public data API — official OEWS wage statistics, no auth, GET/POST only.
+# Exact host only (download.bls.gov deliberately NOT allowed — the MCP tool
+# links it for humans but doesn't fetch it).
+api.bls.gov

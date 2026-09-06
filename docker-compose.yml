@@ -196,6 +196,44 @@ services:
     ports:
       - "127.0.0.1:${MCP_COLIBRI_HEALTH_PORT:-8090}:3000"
 
+  # ---------------------------------------------------------- mcp-salary ----
+  # MCP tool server for salary research: salary_bls (official BLS OEWS wages)
+  # and salary_levels_fyi (deep links — levels.fyi has no public API; see the
+  # tool description for why it returns links, not numbers).
+  #
+  # Synchronous tools (plain HTTPS fetches, seconds — no fire-and-poll needed
+  # unlike colibri). Egress only to api.bls.gov through the squid allowlist
+  # proxy. No host access (no extra_hosts), no published ports (agent-only).
+  mcp-salary:
+    build: ./mcp-salary
+    image: mcp-salary:local
+    networks: [internal]
+    environment:
+      BLS_API_URL: https://api.bls.gov/publicAPI/v1/timeseries/data/
+      LOG_LEVEL: "info"
+      # Force BLS requests through the squid allowlist proxy (same forced-proxy
+      # pattern as mcp-colibri; fail-closed if the env vars are ignored).
+      NODE_USE_ENV_PROXY: "1"
+      HTTP_PROXY: http://egress:3128
+      HTTPS_PROXY: http://egress:3128
+      NO_PROXY: localhost,127.0.0.1
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    mem_limit: 128m
+    cpus: "0.25"
+    pids_limit: 32
+    depends_on: [egress]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   # ---------------------------------------------------------- frontend ------
   # Loopback port publisher for the gateway (published ports don't function on
   # internal networks — this forwarder is the documented R6 fallback in
