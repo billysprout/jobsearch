@@ -16,10 +16,12 @@ npm install
 # Fastest dev mode: fetch + keyword filter, heuristic scores, stdout only
 node scrape.mjs --once --dry-run --limit 5 --no-colibri
 
-# Full run with colibri ranking (chunks of 3 postings)
-node scrape.mjs --once
+# Same thing, as the bundled dev profile (dry-run + limit 5 + heuristic-only
+# chain, all from configs/dev.json — no flags needed)
+node scrape.mjs --once --profile dev
 
-# Full run writing to the sandbox workspace volume
+# Full run with colibri ranking (one posting per call; colibri is the
+# bottleneck — see "Tuning throughput")
 node scrape.mjs --once
 
 # Re-run: dedupe kicks in, only new postings are processed
@@ -34,16 +36,93 @@ node scrape.mjs --once --drafts
 | Flag | Effect |
 |------|--------|
 | `--once` | Required. Single run then exit. |
+| `--profile NAME` | Overlay `configs/NAME.json` on `configs/base.json`. Precedence: this flag > `JOBSCRAPE_PROFILE` env > `production`. See "Configuration & profiles". |
 | `--dry-run` | Output digest to stdout, skip volume write, skip drafting. |
-| `--no-colibri` | Use heuristic keyword scores only (fast, no colibri). |
-| `--limit N` | Cap candidates after pre-filter (default 40). |
+| `--no-colibri` | Force the scorer chain to `keyword-heuristic` only (fast, no colibri). |
+| `--limit N` | Cap candidates after selection (default: `selection.limit`, 40). |
 | `--drafts [N]` | Draft cover letters for the top N ranked postings (default 3) via colibri, using `profile.md`. Off by default — extra colibri calls on top of ranking, and colibri throughput is already why `--limit` is capped at 10 in production. No-op (with a logged reason) if `profile.md` doesn't exist or `--no-colibri` is set. See "Cover-letter drafting" below. |
 
-`config.json`'s `colibri.heuristicSkipThreshold` (default 70) lets very
+`configs/base.json`'s `colibri.heuristicSkipThreshold` (default 70) lets very
 confident keyword matches skip colibri ranking entirely and go straight to
 the digest with a heuristic score — trades a little ranking precision for
 more colibri budget spent on postings that are actually ambiguous. Set to
-`null` to send every candidate through colibri, like before.
+`null` to send every candidate through colibri.
+
+## Configuration & profiles
+
+All tuning lives in config — there are no magic numbers left in the pipeline
+code. Three layers deep-merge (plain objects recurse, **arrays replace
+wholesale**, `null` is a meaningful "off"):
+
+1. `config.mjs` `DEFAULTS` — the schema and every knob's built-in default
+2. `configs/base.json` — the repo's actual content (tracks, ATS slugs,
+   keywords, sources); checked in, applies to every run
+3. `configs/<profile>.json` — per-run overlays. `production.json` sets
+   `selection.limit: 10` (the 07:00 task also passes `--limit 10`); `dev.json`
+   is the fast no-colibri dry-run.
+
+The validator rejects unknown keys (with a Levenshtein suggestion for
+typos), requires each track to have `label` + `keywords` + `description`
+(the description feeds the generated colibri prompt), and enforces that
+every configured filter/scorer name exists in the registry and the scorer
+chain ends in a terminal stage. Legacy keys: `dailyCap` is dropped with a
+warning (read by nothing — the cap is `selection.limit`); a top-level
+`perCompanyMax` still aliases to `selection.perCompanyMax`, with a nudge to
+move it.
+
+Knob map (full defaults in `config.mjs`):
+
+| Key | Meaning |
+|-----|---------|
+| `selection.limit` / `perCompanyMax` | run cap / round-robin cap per company per priority tier |
+| `selection.sourcePriorities` / `unknownSourcePriority` | candidate ordering tiers (curated ATS → boards → unknown) |
+| `selection.reservedSlots` / `reservedSourcePriority` | hold the last N slots for generic boards so a curated flood can't squeeze them out (0 = off) |
+| `filters` / `scorers` / `filterConfig` | stage chains by name + per-stage options — see "Pipeline stages" |
+| `fetch.userAgent` / `fetch.timeoutMs` | request identity; `timeoutMs` null = no timeout (opt-in AbortSignal) |
+| `fetch.hn.*` | HN Who-is-Hiring fetch shape (hits per page, excerpt caps) |
+| `output.digestStatePruneDays` / `topNPerTrack` / `cardExcerptChars` / `tableCellChars` | digest-state retention, summary top-N, card/table sizing |
+| `colibri.generation.*` | max tokens per posting, temperature, prompt excerpt size, one-line/fit-notes caps. **These shape the prompt bytes — changing them costs one full KV-cache re-prefill of the local model.** |
+| `colibri.busyCheck.*` | mcp-colibri `/health` politeness polling |
+| `colibri.chunkSize` / `heuristicSkipThreshold` | postings per colibri call (keep at 1 — the parser trusts the id of a single-posting chunk); heuristic pre-gate threshold (null = off) |
+| `scoring.keyword.*` | heuristic score = distinct keyword hits × pointsPerKeyword × track weight, capped at scoreCap |
+| `draft.*` / `tailor.*` | cover-letter / resume-tailoring generation budgets |
+| `tracks.<key>.{label, description, keywords, weight}` | the taxonomy — single source of truth for the colibri prompt, the parser whitelist, the digest layout, and the push summary |
+
+## Pipeline stages
+
+The pipeline is two named chains, resolved against explicit tables in
+`pipeline/registry.mjs` (deliberately no dynamic `import()` — a config value
+never decides what file gets loaded; adding a stage is a code change: new
+module + one registry row):
+
+- **filters** (default `["keyword-match"]`) run before dedupe, so a posting
+  a dropped filter never matched is never marked seen and can surface later
+  when the filter changes. Interface: `init(config)` → params, `apply(postings,
+  params)` → `{ kept, dropped, byReason }`.
+- **scorers** (default `["keyword-gate", "colibri", "keyword-heuristic"]`)
+  run in order, each receiving the previous stage's `missed`:
+  `keyword-gate` ranks high-confidence keyword matches without colibri,
+  `colibri` ranks the rest (streaming each chunk to the digest; outage-hit
+  chunks defer to `state/pending-colibri.json` for a real retry), and the
+  terminal `keyword-heuristic` fills anything left (a colibri response that
+  succeeded but parsed to nothing — never an outage). The last scorer must
+  be terminal; `validateChains` enforces all of this at startup.
+
+Available stages beyond the defaults: `filters: ["recency"]` (drop postings
+older than `filterConfig.recency.maxAgeDays`; postings with no parseable
+date are kept unless `keepUnknownDate: false`) and `filters: ["blocklist"]`
+(never show `filterConfig.blocklist.companies` or titles matching
+`titlePatterns` regexes — non-compiling patterns are a startup error). Both
+run pre-dedupe, so un-blocking something later lets it resurface instead of
+having been burned as seen.
+
+## Tuning throughput
+
+Colibri scores one posting at a time and can take 1-10+ minutes each — that
+is why production caps `selection.limit` at 10 and the pre-gate skips
+high-confidence matches. `selection.reservedSlots` reserves room for
+board postings when curated ATS companies are prolific; `--profile dev`
+(`dryRun` + heuristic-only chain) runs the whole pipeline in seconds.
 
 ## Scheduling
 
@@ -81,14 +160,19 @@ still writes nothing at all, as before.
 ## Colibri offline behavior
 
 If colibri (localhost:8000) is unreachable or times out:
-- The pipeline falls back to **heuristic keyword scores** automatically.
-- The digest header shows `colibri: OFFLINE (heuristic scores)`.
-- Postings are never lost — colibri is purely a ranking enhancement.
-- Re-run later with colibri available (clear `state/seen.json` to re-score).
+- The affected chunks are **deferred, not degraded**: they go to
+  `state/pending-colibri.json` (never heuristic-scored into the digest) and
+  are retried — pending-first — on the next run.
+- Only a response that *succeeded but parsed to nothing* falls to the
+  terminal heuristic scorer, as a gap-fill.
+- `--no-colibri` is different: an explicit opt-out that heuristic-scores
+  everything now (including anything sitting in the pending queue).
+- The digest banner says OFFLINE only for heuristic-only runs; a mid-run
+  outage doesn't flip the banner for entries colibri did score.
 
 ## Editing the company list
 
-Edit `config.json` → `ats.<source>` to add/remove companies. Each entry needs
+Edit `configs/base.json` → `ats.<source>` to add/remove companies. Each entry needs
 the board slug (the URL path segment) and a display label.
 
 | ATS | Slug = | Verify a slug works |
@@ -219,19 +303,40 @@ infrastructure that isn't there.
 
 | File | Purpose |
 |------|---------|
-| `scrape.mjs` | Orchestrator, CLI, state mgmt, streams ranked chunks to the digest as they complete |
-| `sources.mjs` | Per-board fetchers, normalize to common shape |
-| `colibri.mjs` | Colibri client, batch ranking, heuristic fallback, mcp-colibri busy-check, per-chunk `onChunkRanked` callback |
+| `scrape.mjs` | Orchestrator + CLI: fetch → filter chain → dedupe → select → scorer chain, streaming ranked chunks to the digest as they complete |
+| `config.mjs` | Config schema (`DEFAULTS`), deep-merge layering, validation, `--profile` resolution, legacy aliases |
+| `configs/base.json` | Repo content: tracks/keywords, ATS slugs, sources, WWR categories |
+| `configs/production.json` | Production overlay (`selection.limit: 10`) |
+| `configs/dev.json` | Fast dev profile: dry-run, limit 5, heuristic-only chain, fetch timeout |
+| `state.mjs` | All `state/` IO (seen, pending-colibri, digest state, debug snapshots); formats frozen |
+| `sources.mjs` | Per-board fetchers, normalize to common shape (`fetch.*` config) |
+| `keywords.mjs` | Word-boundary keyword matching + parametrized heuristic scoring |
+| `colibri.mjs` | Colibri client: SSE streaming rank, parse/clamp, heuristic scoring, mcp-colibri busy-check |
+| `pipeline/registry.mjs` | Filter/scorer name→stage tables, interface contract, chain validation |
+| `pipeline/prompt.mjs` | Generates the colibri system prompt + track whitelist from `config.tracks` (KV-cache-stable) |
+| `pipeline/selection.mjs` | Source priority tiers, round-robin company interleave, limit cap, reservedSlots |
+| `pipeline/render.mjs` | Digest/summary/card/README rendering — pure functions over (rankings, config) |
+| `filters/keyword-match.mjs` | Default filter: word-boundary track-keyword matching (pre-dedupe) |
+| `filters/recency.mjs` | Opt-in: drop postings older than `filterConfig.recency.maxAgeDays` |
+| `filters/blocklist.mjs` | Opt-in: drop blocked companies / title-matching regexes |
+| `scorers/keyword-gate.mjs` | Pre-gate: heuristic-confident postings skip colibri |
+| `scorers/colibri-rank.mjs` | Colibri scorer: streaming publish, outage defer, malformed→missed |
+| `scorers/keyword-heuristic.mjs` | Terminal scorer: `--no-colibri` mode + malformed-gap fill |
 | `draft.mjs` | Cover-letter drafting via colibri, from `profile.md` — writes `.md` + `.pdf` |
 | `pdf.mjs` | Shared PDF renderer (pdfkit) — cover letters and the resume, format-only, no AI |
 | `render-resume.mjs` | Renders `profile.md` → `resume.pdf`, pushes to the workspace volume root |
-| `volume-writer.mjs` | Shared tar-pipe-into-docker-volume writer, used by `scrape.mjs` and `render-resume.mjs` |
-| `digest-notify.mjs` | Standalone digest push script, Telegram defaults (dormant — the `job-digest` agent-turn cron is the live checkin) |
-| `config.json` | Tracks, keywords, ATS slugs, WWR categories, caps |
+| `tailor.mjs` | Per-posting AI-tailored resume via colibri, from `resume.md` (master) |
+| `volume-writer.mjs` | Shared tar-pipe-into-docker-volume writer, used by `scrape.mjs`, `render-resume.mjs`, `tailor.mjs` |
+| `text-filter.mjs` | `stripEmDash` for generated output artifacts (prompts never pass through it) |
+| `digest-notify.mjs` | Standalone single-file digest push script, Telegram defaults (dormant — the `job-digest` agent-turn cron is the live checkin) |
+| `diag-readonly.mjs` | Read-only pipeline diagnostics — re-runs matching/scoring against live sources, writes nothing |
 | `package.json` | npm deps (currently just `pdfkit`) — run `npm install` once |
 | `profile.md` | Your actual background (gitignored, same as `.env`) — copy from `profile.example.md` |
 | `profile.example.md` | Template for `profile.md` |
 | `register-task.ps1` | Windows Scheduled Task registration (07:00 daily, 6h timeout) |
-| `state/seen.json` | Dedupe state (url-hash set, auto-created) |
+| `state/seen.json` | Dedupe state (`source:id` strings, auto-created) |
+| `state/pending-colibri.json` | Postings deferred during a colibri outage, retried next run |
+| `state/last-run-{matched,eligible}.json` | Per-run debug snapshots (overwritten every run, incl. dry-run) |
+| `test/` | `node --test` suite: config, keywords, prompt goldens, scorer chain (mock SSE colibri), selection, filters, render, VCR byte-parity |
 | `staging/` | Temp dir for volume writes (auto-created, gitignored) |
 | `logs/` | Scheduler log output (auto-created) |

@@ -39,7 +39,7 @@ Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Se
 Write-Host ""
 Write-Host "Scheduled task '$TaskName' registered." -ForegroundColor Green
 Write-Host "  Trigger:   Daily at 07:00 local time"
-Write-Host "  Command:   $NodePath `"$ScriptPath`" --once"
+Write-Host "  Command:   $NodePath `"$ScriptPath`" --once --limit 10"
 Write-Host "  Logs:      $LogDir/run-YYYY-MM-DD.log"
 Write-Host ""
 Write-Host "To run manually:  schtasks /Run /TN '$TaskName'" -ForegroundColor Cyan
