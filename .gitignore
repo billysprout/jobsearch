@@ -10,6 +10,8 @@ jobscrape/logs/
 # personal work-history/resume content used for cover-letter drafting —
 # never committed; jobscrape/profile.example.md is the checked-in template
 jobscrape/profile.md
+# master resume source for tailor.mjs — same personal-content policy
+jobscrape/resume.md
 
 # scratch space — working notes, not durable docs
 scratch/
