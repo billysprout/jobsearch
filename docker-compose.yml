@@ -4,7 +4,11 @@
 #   [Windows host] > [Docker Desktop WSL2 VM] > [gateway container] > agent tools
 #
 # The gateway container IS the agent sandbox:
-#   - named volumes only — no host bind mounts, so no path from the agent to C:\
+#   - NO host bind mounts in any agent-reachable container (gateway/cli/mcp-*),
+#     so no path from the agent to C:\. The only host binds are operator-side:
+#     egress's read-only allowlist file and jobscrape-config's operator-state
+#     dirs (configs rw for the shared scrape config, state/logs read-only) —
+#     none reachable from the sandbox network side
 #   - NO Docker socket mounted, per-agent docker sandbox stays OFF
 #   - egress ONLY through the squid allowlist proxy (api.z.ai / open.bigmodel.cn);
 #     the gateway sits on an internal network with no direct route to the internet
@@ -239,27 +243,26 @@ services:
       retries: 3
 
   # ------------------------------------------------------ mcp-jobscrape -----
-  # Agent-driven configuration for the host-side job scraper: the agent maps a
+  # Agent-driven configuration for the job scraper: the agent maps a
   # non-technical user's chat requests ("block Acme", "only recent postings")
-  # onto typed tools that proxy to config-server.mjs on the HOST
-  # (host.docker.internal:8790, token-gated — see jobscrape/config-server.mjs).
-  # Host reachability + forced-proxy wiring mirror mcp-colibri (extra_hosts +
-  # squid allowlist by domain); hardening mirrors mcp-salary. The token is
-  # config-write power — it lives in .env, never committed.
+  # onto typed tools that proxy to the jobscrape-config container
+  # (jobscrape-config:8790, token-gated — see jobscrape/config-server.mjs).
+  # Dual-homed: internal (agent SSE) + jobscrape (config peer). The gateway
+  # has NO route to jobscrape-config — the only path to config writes is this
+  # container's curated tool table. The token is config-write power — it
+  # lives in .env, never committed.
   mcp-jobscrape:
     build: ./mcp-jobscrape
     image: mcp-jobscrape:local
-    networks: [internal]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    networks: [internal, jobscrape]
     environment:
-      JOBSCRAPE_CONFIG_URL: http://host.docker.internal:8790
+      JOBSCRAPE_CONFIG_URL: http://jobscrape-config:8790
       JOBSCRAPE_CONFIG_TOKEN: ${JOBSCRAPE_CONFIG_TOKEN}
       LOG_LEVEL: "info"
       NODE_USE_ENV_PROXY: "1"
       HTTP_PROXY: http://egress:3128
       HTTPS_PROXY: http://egress:3128
-      NO_PROXY: localhost,127.0.0.1
+      NO_PROXY: localhost,127.0.0.1,jobscrape-config
     restart: unless-stopped
     init: true
     read_only: true
@@ -270,12 +273,73 @@ services:
     mem_limit: 128m
     cpus: "0.25"
     pids_limit: 32
-    depends_on: [egress]
+    depends_on: [egress, jobscrape-config]
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 30s
       timeout: 5s
       retries: 3
+
+  # --------------------------------------------------- jobscrape-config -----
+  # Config/status service for the host-run scrape (formerly a host Node
+  # process on 0.0.0.0:8790 — containerized so it survives sessions and no
+  # host listener exists). Isolated on the jobscrape network: its ONLY peers
+  # are mcp-jobscrape (the curated tool path) and the jobscrape-frontend
+  # forwarder (browser status page). Makes no outbound calls — no proxy env,
+  # no egress dependency. Shares configs/state/logs with the host via binds
+  # because the 07:00 HOST task (scrape.mjs, needs host docker CLI + tar)
+  # reads/writes the same files; the rw configs bind is the stack's only
+  # writable host mount (operator state, same trust tier as egress's
+  # extra-domains.txt).
+  jobscrape-config:
+    build: ./jobscrape
+    image: jobscrape-config:local
+    networks: [jobscrape]
+    environment:
+      JOBSCRAPE_CONFIG_TOKEN: ${JOBSCRAPE_CONFIG_TOKEN}
+    volumes:
+      - ./jobscrape/configs:/app/configs
+      - ./jobscrape/state:/app/state:ro
+      - ./jobscrape/logs:/app/logs:ro
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    mem_limit: 128m
+    cpus: "0.25"
+    pids_limit: 32
+    healthcheck:
+      # 127.0.0.1, not localhost: the server binds 0.0.0.0 (IPv4 only) and
+      # localhost resolves to ::1 first inside the container → refused
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8790/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ------------------------------------------------- jobscrape-frontend -----
+  # Loopback port publisher for jobscrape-config's status page (same socat
+  # forwarder pattern + frontend image as above: published ports don't
+  # function on internal networks). Host 127.0.0.1:${JOBSCRAPE_CONFIG_PORT:-8790}
+  # -> jobscrape-config:8790. The browser status URL is unchanged.
+  jobscrape-frontend:
+    build: ./frontend
+    image: openclaw-frontend:local
+    networks: [jobscrape, egress]
+    entrypoint: ["socat", "TCP-LISTEN:8790,fork,reuseaddr", "TCP:jobscrape-config:8790"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    cpus: "0.25"
+    pids_limit: 64
+    ports:
+      - "127.0.0.1:${JOBSCRAPE_CONFIG_PORT:-8790}:8790"
+    depends_on: [jobscrape-config]
 
   # ---------------------------------------------------------- frontend ------
   # Loopback port publisher for the gateway (published ports don't function on
@@ -310,6 +374,11 @@ networks:
     internal: true
   # Only the egress proxy + loopback forwarder are attached here.
   egress: {}
+  # jobscrape-config + mcp-jobscrape + its loopback forwarder ONLY. The
+  # gateway is deliberately NOT attached: no route, no DNS — the gateway's
+  # only path to jobscrape config is mcp-jobscrape's curated tools.
+  jobscrape:
+    internal: true
 
 volumes:
   openclaw-config: {}

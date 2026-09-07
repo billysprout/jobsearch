@@ -1,0 +1,14 @@
+# Live operator state arrives via compose bind mounts, never baked in;
+# personal files (profile/resume/PDFs) must never enter a build context.
+configs/
+state/
+logs/
+staging/
+postings/
+test/
+node_modules/
+package-lock.json
+profile.md
+resume.md
+*.pdf
+*.log

@@ -162,7 +162,9 @@ in JSON`) — this one needs the Bash tool/Git Bash, not PowerShell.
 Headless scrape pipeline that runs **outside** the sandbox (Windows host, plain Node,
 no Docker) — deliberately, so the untrusted-input leg (`web_fetch`/`browser`) never has to
 reopen inside the sandbox. Writes results into the sandbox's workspace volume via a
-tar-pipe through a one-off alpine container. See `jobscrape/README.md` for full operator
+tar-pipe through a one-off alpine container. Its config/status service is the exception:
+the `jobscrape-config` compose container (bind-mounted to the same `configs/` files the
+host scrape reads — edits apply on the next run). See `jobscrape/README.md` for full operator
 docs; summary here.
 
 **Sources**: RemoteOK, Remotive, HN "Who is Hiring", Greenhouse ATS (Riot Games, Epic
@@ -263,12 +265,13 @@ forgotten default.
 Two local models are wired in, for different reasons — colibri as a private/no-quota
 option the agent can explicitly reach for, Gemma 4 as an automatic fallback when z.ai is
 unavailable. Both run on the **Windows host**, reached from inside the sandbox exclusively
-via `host.docker.internal` through the squid egress proxy — no new egress surface either
-way, since that ACL already existed.
+via `host.docker.internal` through the squid egress proxy. The ACL is port-scoped to
+exactly these two ports — no other host port is reachable through the proxy.
 
 ```
 gateway/mcp-colibri (internal network only, extra_hosts: host.docker.internal:host-gateway)
-  → squid (internal + egress networks, plain-HTTP ACL for host.docker.internal)
+  → squid (internal + egress networks, plain-HTTP ACL for host.docker.internal,
+    port-scoped to 8000/11434)
     → host.docker.internal:<port>
       → colibri (:8000) or Ollama (:11434) on the Windows host
 ```
@@ -299,10 +302,15 @@ other variant, or you get a silent "model not found."
 config only allows CONNECT tunnels. Added:
 ```
 acl host_local dstdomain host.docker.internal
-http_access allow host_local
+acl host_model_ports port 8000 11434
+http_access allow host_local host_model_ports
 ```
-This allows both plain HTTP and CONNECT to `host.docker.internal` — the one destination
-outside the normal allowlisted-HTTPS-domains model.
+This allows plain HTTP to `host.docker.internal` on the two model ports only — the one
+destination outside the normal allowlisted-HTTPS-domains model. The port scope matters on
+Docker Desktop: `host.docker.internal` lands on the host loopback, where this stack
+publishes its own loopback-only services (the gateway frontend on 18789, the jobscrape
+status page on 8790) — an any-port ACL would let a proxy-honoring container reach those
+sideways.
 
 **Prefill is expensive, decode is comparatively cheap.** A 4,092-token prompt (OpenClaw's
 own system prompt size) takes ~30–60s just for prefill — 78 layers, each needing its

@@ -103,7 +103,9 @@ reading or writing JSON by hand.
 chat ("block Acme Corp") ── OpenClaw agent ── mcp-jobscrape container
                                               │  POST /action + bearer token
                                               ▼
-                       config-server.mjs (host, 127.0.0.1:8790 — token-gated)
+                       config-server.mjs (jobscrape-config container, :8790
+                       — token-gated, isolated on the `jobscrape` compose
+                       network; the gateway has no route to it)
                          validates via config.mjs → snapshot both layers to
                          configs/.backups/ → atomic write → audit.jsonl line
 ```
@@ -132,17 +134,12 @@ Two side doors for the operator:
   `POST /action` with `{action, params}` (same table the agent uses). Auth:
   `Authorization: Bearer $JOBSCRAPE_CONFIG_TOKEN`.
 
-Lifecycle mirrors the 07:00 task (run once as admin):
-
-```powershell
-cd C:\claw-code-local\openclaw-sandbox\jobscrape
-powershell -ExecutionPolicy Bypass -File register-config-server.ps1
-```
-
-Registers an at-logon Scheduled Task (`OpenClaw-JobScrapeConfigServer`)
-running `node config-server.mjs`; logs append to `logs/config-server.log`.
-It must be up whenever the agent might configure — unlike colibri, nobody
-starts it by hand.
+The config server runs as the `jobscrape-config` compose service — it is up
+whenever the stack is (`docker compose up -d` from the repo root), restarts
+on failure, and logs via `docker compose logs jobscrape-config`. The browser
+status page is published loopback-only by the `jobscrape-frontend` forwarder
+container. No scheduled task is involved. (The old `register-config-server.ps1`
+schtasks path is gone — superseded by the container.)
 
 ## Pipeline stages
 
@@ -390,6 +387,8 @@ infrastructure that isn't there.
 | `profile.md` | Your actual background (gitignored, same as `.env`) — copy from `profile.example.md` |
 | `profile.example.md` | Template for `profile.md` |
 | `register-task.ps1` | Windows Scheduled Task registration (07:00 daily, 6h timeout) |
+| `config-server.mjs` | Config/status HTTP service for agent-driven config — runs as the `jobscrape-config` compose container, bind-mounted to this dir's `configs/` (rw), `state/` + `logs/` (ro) |
+| `Dockerfile` / `.dockerignore` | Build recipe for `jobscrape-config` (stdlib-only import graph, no npm install; live state never baked into the image) |
 | `state/seen.json` | Dedupe state (`source:id` strings, auto-created) |
 | `state/pending-colibri.json` | Postings deferred during a colibri outage, retried next run |
 | `state/last-run-{matched,eligible}.json` | Per-run debug snapshots (overwritten every run, incl. dry-run) |

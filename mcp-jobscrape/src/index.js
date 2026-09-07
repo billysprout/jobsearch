@@ -9,10 +9,11 @@
 // previous config, and writes atomically. The tool response's `note` field is
 // written in plain language — relay it to the user rather than re-explaining.
 //
-// Transport: SSE over HTTP, same pattern as mcp-salary/mcp-colibri. Egress to
-// the host service goes through the squid allowlist proxy (forced by
-// HTTP_PROXY env vars) — host.docker.internal is allowlisted by name for any
-// port (egress/squid.conf `host_local` ACL).
+// Transport: SSE over HTTP, same pattern as mcp-salary/mcp-colibri. Reaches
+// the jobscrape-config container directly on the dedicated internal jobscrape
+// network (NO_PROXY peer — no proxy, no host access involved). The gateway
+// has no route to that network: this container's curated tools are the only
+// configuration path.
 //
 // Security: this container can CHANGE what the user's job scraper does. The
 // token is the only thing standing between a prompt-injected agent turn and
@@ -24,7 +25,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 import http from "node:http";
 
-const CONFIG_URL = process.env.JOBSCRAPE_CONFIG_URL || "http://host.docker.internal:8790";
+const CONFIG_URL = process.env.JOBSCRAPE_CONFIG_URL || "http://jobscrape-config:8790";
 const TOKEN = process.env.JOBSCRAPE_CONFIG_TOKEN || "";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const LOG_LEVEL = process.env.LOG_LEVEL || "warn";
