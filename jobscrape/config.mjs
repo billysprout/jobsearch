@@ -131,6 +131,21 @@ export const DEFAULTS = {
     },
   },
 
+  // Fallback ranker: Ollama on the host (the same instance the gateway uses
+  // as its z.ai fallback). Used ONLY when a colibri chunk errors; both
+  // engines failing = defer to the pending queue as before. maxTokens must
+  // exceed colibri's per-posting budget — this model reasons before it
+  // answers and reasoning counts against max_tokens (live-measured ~2x the
+  // answer length). timeoutMs covers a cold model load (Ollama unloads after
+  // 5 min idle).
+  gemma: {
+    enabled: true,
+    baseUrl: "http://localhost:11434/v1",
+    model: "gemma4-e2b-64k",
+    timeoutMs: 300000,
+    maxTokens: 1024,
+  },
+
   // Keyword heuristic scoring (keywords.mjs): score = distinct keyword hits
   // * pointsPerKeyword * track weight, capped at scoreCap.
   scoring: {

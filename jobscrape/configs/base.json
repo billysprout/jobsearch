@@ -9,6 +9,10 @@
     "heuristicSkipThreshold": 70,
     "mcpHealthUrl": "http://127.0.0.1:8090/health"
   },
+  "gemma": {
+    "baseUrl": "http://localhost:11434/v1",
+    "model": "gemma4-e2b-64k"
+  },
   "selection": {
     "perCompanyMax": 3
   },

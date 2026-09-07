@@ -86,6 +86,7 @@ Knob map (full defaults in `config.mjs`):
 | `colibri.generation.*` | max tokens per posting, temperature, prompt excerpt size, one-line/fit-notes caps. **These shape the prompt bytes — changing them costs one full KV-cache re-prefill of the local model.** |
 | `colibri.busyCheck.*` | mcp-colibri `/health` politeness polling |
 | `colibri.chunkSize` / `heuristicSkipThreshold` | postings per colibri call (keep at 1 — the parser trusts the id of a single-posting chunk); heuristic pre-gate threshold (null = off) |
+| `gemma.*` | fallback ranker (Ollama, localhost:11434): `enabled`, `baseUrl`, `model`, `timeoutMs` (covers a cold model load), `maxTokens` (must exceed colibri's per-posting budget — the model reasons before answering and reasoning counts against the cap). Fires only when a colibri chunk errors; not exposed via the config server |
 | `scoring.keyword.*` | heuristic score = distinct keyword hits × pointsPerKeyword × track weight, capped at scoreCap |
 | `draft.*` / `tailor.*` | cover-letter / resume-tailoring generation budgets |
 | `tracks.<key>.{label, description, keywords, weight}` | the taxonomy — single source of truth for the colibri prompt, the parser whitelist, the digest layout, and the push summary |
@@ -213,13 +214,24 @@ still writes nothing at all, as before.
 ## Colibri offline behavior
 
 If colibri (localhost:8000) is unreachable or times out:
-- The affected chunks are **deferred, not degraded**: they go to
-  `state/pending-colibri.json` (never heuristic-scored into the digest) and
-  are retried — pending-first — on the next run.
+- The affected chunk first retries via the **gemma fallback** (`config.gemma`,
+  Ollama on localhost:11434, model `gemma4-e2b-64k`) — a ~4s warm call that
+  produces a real ranking (digest entries carry `ranker: "gemma"`, and the
+  digest banner says so). A chunk is **deferred, not degraded** only when BOTH
+  engines fail: it goes to `state/pending-colibri.json` (the filename is
+  historical — gemma failures land there too) and is retried — pending-first —
+  on the next run. Set `gemma.enabled: false` to restore colibri-only
+  behavior.
+- Caveat: Ollama is a shared engine — the gateway uses the same model as its
+  z.ai fallback, so a total-cloud-outage day can contend the ~1.8GB VRAM.
+  Harmless, just slower.
 - Only a response that *succeeded but parsed to nothing* falls to the
-  terminal heuristic scorer, as a gap-fill.
+  terminal heuristic scorer, as a gap-fill (a gemma response that parses to
+  nothing defers instead — tomorrow's colibri retry beats a heuristic score
+  from fallback-engine garbage).
 - `--no-colibri` is different: an explicit opt-out that heuristic-scores
-  everything now (including anything sitting in the pending queue).
+  everything now (including anything sitting in the pending queue) — it does
+  not engage the gemma fallback.
 - The digest banner says OFFLINE only for heuristic-only runs; a mid-run
   outage doesn't flip the banner for entries colibri did score.
 
@@ -364,7 +376,7 @@ infrastructure that isn't there.
 | `state.mjs` | All `state/` IO (seen, pending-colibri, digest state, debug snapshots); formats frozen |
 | `sources.mjs` | Per-board fetchers, normalize to common shape (`fetch.*` config) |
 | `keywords.mjs` | Word-boundary keyword matching + parametrized heuristic scoring |
-| `colibri.mjs` | Colibri client: SSE streaming rank, parse/clamp, heuristic scoring, mcp-colibri busy-check |
+| `colibri.mjs` | Colibri client: SSE streaming rank, parse/clamp, heuristic scoring, mcp-colibri busy-check; per-chunk gemma (Ollama) fallback before defer |
 | `pipeline/registry.mjs` | Filter/scorer name→stage tables, interface contract, chain validation |
 | `pipeline/prompt.mjs` | Generates the colibri system prompt + track whitelist from `config.tracks` (KV-cache-stable) |
 | `pipeline/selection.mjs` | Source priority tiers, round-robin company interleave, limit cap, reservedSlots |
@@ -392,6 +404,5 @@ infrastructure that isn't there.
 | `state/seen.json` | Dedupe state (`source:id` strings, auto-created) |
 | `state/pending-colibri.json` | Postings deferred during a colibri outage, retried next run |
 | `state/last-run-{matched,eligible}.json` | Per-run debug snapshots (overwritten every run, incl. dry-run) |
-| `test/` | `node --test` suite: config, keywords, prompt goldens, scorer chain (mock SSE colibri), selection, filters, render, VCR byte-parity |
 | `staging/` | Temp dir for volume writes (auto-created, gitignored) |
 | `logs/` | Scheduler log output (auto-created) |

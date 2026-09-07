@@ -2,18 +2,20 @@
 // Uses built-in fetch with AbortController timeout.
 // Note: colibri with stream=false buffers the full response — socket is idle during
 // generation, so undici's headersTimeout (default 300s) must not be hit.
-// Defensive: strips fences, finds first JSON array. A chunk that errors (offline,
-// timeout, bad HTTP response) is NOT heuristic-scored here — it's reported back via
-// colibriOk:false with no ranking, and the caller (scrape.mjs) defers it to the
-// pending-colibri queue for retry once colibri is back, instead of permanently
-// burning it into the digest with a degraded score. heuristicRankings() below is
-// still used for explicit --no-colibri runs and the heuristicSkipThreshold pre-gate
+// Defensive: strips fences, finds first JSON array. Per chunk, the failure
+// order is colibri → gemma fallback (config.gemma — Ollama on the host) →
+// defer: only when BOTH engines fail is the chunk reported via colibriOk:false
+// with no ranking for the caller (scrape.mjs) to defer to the pending-colibri
+// queue — never permanently burned into the digest with a degraded score. A
+// gemma-fallback success is a real ranking (entries carry ranker:"gemma"), not
+// a degraded one. heuristicRankings() below is still used for explicit
+// --no-colibri runs and the heuristicSkipThreshold pre-gate
 // (config.colibri.heuristicSkipThreshold) — both deliberate, not offline fallback.
 
 import { bestTrackScore, DEFAULT_KEYWORD_SCORING } from "./keywords.mjs";
 import { buildSystemPrompt, trackWhitelist } from "./pipeline/prompt.mjs";
 
-/** @typedef {{ id: string, score: number, track: string, one_line: string, fit_notes: string }} Ranking */
+/** @typedef {{ id: string, score: number, track: string, one_line: string, fit_notes: string, ranker?: string }} Ranking */
 
 
 /**
@@ -37,7 +39,6 @@ export async function rankPostings(config, postings, onChunkRanked) {
 
   const { baseUrl, model, timeoutMs, chunkSize } = config.colibri;
   const generation = config.colibri.generation;
-  const endpoint = `${baseUrl}/chat/completions`;
   // Taxonomy derives from config.tracks — see pipeline/prompt.mjs for why
   // the generated prompt's bytes matter (KV cache) and why tracks sort
   // alphabetically.
@@ -65,73 +66,47 @@ export async function rankPostings(config, postings, onChunkRanked) {
       console.error(`[colibri] chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(postings.length / chunkSize)}: ${chunk.length} postings, calling ${model}...`, `[t0=${Date.now()}]`);
 
       const t0 = Date.now();
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-      // stream:true so colibri sends response headers immediately (avoiding
-      // undici headersTimeout during idle prefill). We collect SSE deltas.
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-          max_tokens: chunk.length * generation.maxTokensPerPosting,
-          temperature: generation.temperature,
-          stream: true,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        clearTimeout(timer);
-        const text = await res.text().catch(() => "");
-        throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-      }
-
-      // Collect streamed SSE deltas — accumulate delta.content across chunks.
-      // stream:true makes colibri send headers immediately, avoiding undici
-      // headersTimeout during idle prefill. Format: standard SSE ("data: {...}\n\n").
-      const contentParts = [];
-      const reader = res.body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        contentParts.push(value);
-      }
-      clearTimeout(timer);
-
-      const raw = Buffer.concat(contentParts).toString();
-      let content = "";
-      let usage = null;
-      try {
-        const lines = raw.split("\n").filter(l => l.startsWith("data: "));
-        for (const line of lines) {
-          const payload = line.slice(6).trim();
-          if (payload === "[DONE]") continue;
-          const chunk = JSON.parse(payload);
-          const delta = chunk.choices?.[0]?.delta;
-          if (delta?.content) content += delta.content;
-          if (chunk.usage) usage = chunk.usage;
-        }
-      } catch (e) {
-        throw new Error(`Failed to parse SSE stream: ${e.message}`);
-      }
-      if (!content) throw new Error("Empty content from colibri SSE stream");
-
-      if (usage) console.error(`[colibri] tokens: ${usage.prompt_tokens}+${usage.completion_tokens}=${usage.total_tokens}`, `[elapsed=${(Date.now() - t0) / 1000}s]`);
-      else console.error(`[colibri] no usage in response`, `[elapsed=${(Date.now() - t0) / 1000}s]`);
+      const { content, usage } = await chatCompletionStream(
+        { baseUrl, model, timeoutMs, maxTokens: chunk.length * generation.maxTokensPerPosting },
+        generation.temperature, systemPrompt, userPrompt,
+      );
+      logUsage(usage, t0);
 
       const parsed = parseRankingResponse(content, chunk.map(p => p.id), whitelist, generation);
+      for (const r of parsed) r.ranker = "colibri";
       allRankings.push(...parsed);
       console.error(`[colibri] parsed ${parsed.length}/${chunk.length} rankings from chunk`);
       await publishChunk(parsed, chunk, true);
 
     } catch (err) {
-      console.error(`[colibri] ERROR: ${err.message} — deferring chunk for retry (no heuristic fallback)`);
+      const gemma = config.gemma;
+      if (gemma?.enabled) {
+        console.error(`[colibri] ERROR: ${err.message} — trying gemma fallback (${gemma.model})`);
+        const gt0 = Date.now();
+        try {
+          const { content, usage } = await chatCompletionStream(
+            { baseUrl: gemma.baseUrl, model: gemma.model, timeoutMs: gemma.timeoutMs, maxTokens: gemma.maxTokens },
+            generation.temperature, systemPrompt, userPrompt,
+          );
+          logUsage(usage, gt0);
+
+          const parsed = parseRankingResponse(content, chunk.map(p => p.id), whitelist, generation);
+          // Unlike a malformed colibri success (which falls through to the
+          // terminal heuristic scorer), a gemma response with no parseable
+          // rankings defers — tomorrow's colibri retry beats burning a
+          // heuristic score on fallback-engine garbage.
+          if (!parsed.length) throw new Error("no parseable rankings in gemma response");
+          for (const r of parsed) r.ranker = "gemma";
+          allRankings.push(...parsed);
+          console.error(`[colibri] gemma fallback ranked ${parsed.length}/${chunk.length} posting(s) [elapsed=${((Date.now() - gt0) / 1000).toFixed(1)}s]`);
+          await publishChunk(parsed, chunk, true);
+          continue;
+        } catch (gerr) {
+          console.error(`[colibri] gemma fallback also failed: ${gerr.message} — deferring chunk for retry (no heuristic fallback)`);
+        }
+      } else {
+        console.error(`[colibri] ERROR: ${err.message} — deferring chunk for retry (no heuristic fallback)`);
+      }
       colibriOnline = false;
       // No ranking produced — caller defers this chunk to the pending queue.
       await publishChunk([], chunk, false);
@@ -167,6 +142,79 @@ export function heuristicRankings(postings, trackKeywords, scoring = DEFAULT_KEY
 }
 
 // --- Internal ---
+
+// One engine call: POST {baseUrl}/chat/completions with SSE streaming, buffer
+// the whole body, accumulate delta.content. Shared by colibri (primary) and
+// the gemma fallback — identical request shape, differing only in the config
+// slice (baseUrl/model/timeoutMs/maxTokens). stream:true so the server sends
+// response headers immediately (avoiding undici headersTimeout during idle
+// prefill). Format: standard SSE ("data: {...}\n\n"). Gemma is
+// thinking-capable: while thinking it emits delta.reasoning with content
+// present-but-empty, so accumulating only delta.content handles both engines.
+// The deadline timer is cleared in a finally — a failed call must not leave
+// an armed timer holding the event loop open (each failed chunk used to leak
+// one until it fired).
+async function chatCompletionStream({ baseUrl, model, timeoutMs, maxTokens }, temperature, systemPrompt, userPrompt) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: maxTokens,
+        temperature,
+        stream: true,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+    }
+
+    const contentParts = [];
+    const reader = res.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      contentParts.push(value);
+    }
+
+    const raw = Buffer.concat(contentParts).toString();
+    let content = "";
+    let usage = null;
+    try {
+      const lines = raw.split("\n").filter(l => l.startsWith("data: "));
+      for (const line of lines) {
+        const payload = line.slice(6).trim();
+        if (payload === "[DONE]") continue;
+        const chunk = JSON.parse(payload);
+        const delta = chunk.choices?.[0]?.delta;
+        if (delta?.content) content += delta.content;
+        if (chunk.usage) usage = chunk.usage;
+      }
+    } catch (e) {
+      throw new Error(`Failed to parse SSE stream: ${e.message}`);
+    }
+    if (!content) throw new Error("Empty content from SSE stream");
+    return { content, usage };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function logUsage(usage, t0) {
+  const elapsed = `[elapsed=${((Date.now() - t0) / 1000).toFixed(1)}s]`;
+  if (usage) console.error(`[colibri] tokens: ${usage.prompt_tokens}+${usage.completion_tokens}=${usage.total_tokens}`, elapsed);
+  else console.error(`[colibri] no usage in response`, elapsed);
+}
 
 // Best-effort coordination with the in-sandbox `ask_colibri` MCP tool
 // (mcp-colibri/), which hits this same colibri process from inside the

@@ -33,7 +33,11 @@ export function renderDigest(dateStr, ranked, colibriOnline, config) {
 
   let md = `# Job Digest — ${dateStr}\n\n`;
   if (colibriOnline) {
-    md += `Ranked by **colibri (${config.colibri.model})**. ${ranked.length} postings scored.\n\n`;
+    const usedGemma = ranked.some(r => r.ranker === "gemma");
+    const engine = usedGemma
+      ? `colibri (${config.colibri.model}) + gemma fallback (${config.gemma.model})`
+      : `colibri (${config.colibri.model})`;
+    md += `Ranked by **${engine}**. ${ranked.length} postings scored.\n\n`;
   } else {
     md += `> **colibri: OFFLINE (heuristic scores)** -- keyword-based only.\n\n`;
   }
@@ -81,6 +85,9 @@ export function renderSummaryJson(ranked, topNPerTrack = 5, tracks = {}) {
         title: r._posting.title,
         url: r._posting.url,
         one_line: r.one_line,
+        // Only set when a specific engine ranked it; heuristic-scored
+        // entries (keyword-gate / terminal fill) carry no ranker field.
+        ...(r.ranker ? { ranker: r.ranker } : {}),
       });
     }
   }

@@ -358,6 +358,9 @@ neither reachable, no working fallback at all).
 Colibri was considered and rejected for this role — wrong tool twice over: it can't load
 Gemma 4 at all (architecture-locked), and even if it could, it's built to make a 744B
 model bearable, not to be fast — the opposite of what an automatic fallback needs.
+The relationship now runs the other way too: the job scrape (`jobscrape/`) uses this
+Ollama model as its fallback ranker when a colibri ranking call fails
+(`config.gemma`, see `jobscrape/README.md` → "Colibri offline behavior").
 
 **Setup**: Ollama (already installed) running natively on the Windows host, port 11434.
 Model `gemma4:e2b` pulled via `ollama pull gemma4:e2b` (7.2GB on disk). ~1.8GB VRAM when
