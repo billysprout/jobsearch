@@ -228,7 +228,10 @@ async function main() {
   // 4. Order + cap. Pending postings (carried over from a prior colibri
   // outage) go first — see pipeline/selection.mjs.
   console.error("[main] step 4/6: prioritizing + capping...");
-  const candidates = buildCandidates(pendingQueue.values(), freshMatched, config.selection);
+  // --limit overrides selection.limit (buildCandidates reads it off the
+  // selection object, so overlay the flag onto the config slice — passing
+  // config.selection verbatim made the flag decorative).
+  const candidates = buildCandidates(pendingQueue.values(), freshMatched, { ...config.selection, limit: LIMIT });
   console.error(`[main] ${candidates.length} candidates after priority sort + cap (${pendingQueue.size} pending + ${freshMatched.length} new-eligible)`);
   if (config.selection.reservedSlots > 0) {
     console.error(`[main] ${config.selection.reservedSlots} slot(s) reserved for sources with priority >= ${config.selection.reservedSourcePriority}`);

@@ -315,14 +315,22 @@ function parseRankingResponse(content, expectedIds, trackWhitelist, generation) 
   try {
     const arr = JSON.parse(cleaned.substring(start, end + 1));
     if (!Array.isArray(arr)) return [];
-    // Validate shape, fill defaults for missing fields
-    return arr.map(r => ({
-      id: String(r.id || "unknown"),
-      score: Math.max(0, Math.min(100, Number(r.score) || 0)),
-      track: trackWhitelist.includes(r.track) ? r.track : "none",
-      one_line: String(r.one_line || "").substring(0, generation.oneLineMaxChars),
-      fit_notes: String(r.fit_notes || "").substring(0, generation.fitNotesMaxChars),
-    }));
+    // Validate shape, fill defaults for missing fields. Dedupe by id keeping
+    // the first — gemma occasionally emits several objects for one posting
+    // (seen live 2026-09-08: "ranked 3/1"), and the chunk-1 id-fixup in
+    // colibri-rank.mjs would turn those into duplicate digest rows.
+    const byId = new Map();
+    for (const r of arr) {
+      const row = {
+        id: String(r.id || "unknown"),
+        score: Math.max(0, Math.min(100, Number(r.score) || 0)),
+        track: trackWhitelist.includes(r.track) ? r.track : "none",
+        one_line: String(r.one_line || "").substring(0, generation.oneLineMaxChars),
+        fit_notes: String(r.fit_notes || "").substring(0, generation.fitNotesMaxChars),
+      };
+      if (!byId.has(row.id)) byId.set(row.id, row);
+    }
+    return [...byId.values()];
   } catch (e) {
     console.error(`[colibri] JSON parse error: ${e.message}`);
     return [];
