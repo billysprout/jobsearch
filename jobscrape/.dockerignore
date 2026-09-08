@@ -12,3 +12,6 @@ profile.md
 resume.md
 *.pdf
 *.log
+# Gateway-container-only (imports nothing, but is deployed as a single file
+# into the openclaw workspace volume) — dead weight in the scraper image.
+digest-notify.mjs

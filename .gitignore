@@ -21,3 +21,6 @@ scratch/
 
 # parity fixture: regenerated on every record/replay run — not part of the frozen fixture
 jobscrape/test/fixtures/parity/state/last-run-*.json
+
+# kit build output
+installer/dist/

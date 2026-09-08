@@ -58,6 +58,15 @@ const MAX_DAILY_LIMIT = 40; // DEFAULTS.selection.limit — colibri is 1-10+ min
 const nowStamp = () => new Date().toISOString().replace(/:/g, "-").replace(/\..+$/, "");
 
 function json(res, code, obj) {
+  // Defensive: an error path firing after the response head is already out
+  // (e.g. a handler that wrote 200 then threw mid-body) must end the
+  // response, not double-writeHead and crash the whole server. Live-proven
+  // 2026-09-08: a fresh install with no configs/production.json did exactly
+  // that via the GET / error path.
+  if (res.headersSent) {
+    res.end();
+    return;
+  }
   const body = JSON.stringify(obj, null, 2);
   res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" });
   res.end(body);
@@ -89,9 +98,12 @@ function writeJsonFile(file, obj) {
   fs.renameSync(tmp, file);
 }
 
-// Merged + validated view of exactly what the 07:00 task would load.
+// Merged + validated view of exactly what the daily task would load. The
+// profile follows the scraper's (JOBSCRAPE_PROFILE, default "production")
+// — a standalone kit machine has no production.json and runs profile
+// "friend"; hardcoding production here 500'd every status view there.
 function mergedConfig(configDir) {
-  return loadConfig({ dir: configDir, profile: "production" });
+  return loadConfig({ dir: configDir, profile: process.env.JOBSCRAPE_PROFILE || "production" });
 }
 
 function readLayers(configDir) {
@@ -492,9 +504,13 @@ export function createConfigServer({ configDir = __dirname, stateDir, logsDir, t
         return json(res, 200, { ...statusView(configDir, stateDir, logsDir), lastLogLines: tailLog(logsDir) });
       }
       if (req.method === "GET" && url.pathname === "/") {
+        // Render BEFORE writing headers — statusHtml can throw (fresh
+        // install, unreadable state) and the catch below must still be able
+        // to send a clean JSON 500.
+        const html = statusHtml(configDir, stateDir, logsDir);
         log(200);
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(statusHtml(configDir, stateDir, logsDir));
+        return res.end(html);
       }
       if (req.method === "POST" && url.pathname === "/action") {
         let body = "";

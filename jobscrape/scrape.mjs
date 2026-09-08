@@ -1,6 +1,8 @@
 // scrape.mjs — daily job-scrape orchestrator.
-// Runs on the Windows HOST (not in the sandbox). Writes results into the
-// sandbox workspace volume via a tar-pipe through a one-off alpine container.
+// Runs on the Windows HOST (not in the sandbox) for the sandbox-stack
+// deployment, or inside a container for standalone deployments (see
+// ../deploy/docker-compose.yml + scheduler.mjs — digests then land in
+// config.publish.localDir instead of the workspace volume).
 //
 // Usage:
 //   node scrape.mjs --once                   # full run (fetch + colibri + write to volume)
@@ -35,8 +37,8 @@
 //   6. optional cover-letter drafting (--drafts), on top of the
 //      already-published digest
 //
-// --dry-run skips all state/volume writes entirely (no seen.json write, no
-// digest-state write, no volume write, no drafting) — side-effect-free.
+// --dry-run skips all state/publish writes entirely (no seen.json write, no
+// digest-state write, no volume/localDir write, no drafting) — side-effect-free.
 
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,7 +55,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // leaves everything up to the kill on disk. Append mode: same-day reruns
 // concatenate (run starts are marked by the [main] === line). UTC date,
 // matching todayStamp()/digest naming.
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { format } from "node:util";
 {
   const logDir = resolve(__dirname, "logs");
@@ -73,6 +75,7 @@ import { format } from "node:util";
 import { fetchAll } from "./sources.mjs";
 import { draftTopN } from "./draft.mjs";
 import { writeFilesToVolume } from "./volume-writer.mjs";
+import { stripEmDash } from "./text-filter.mjs";
 import { loadConfig } from "./config.mjs";
 import * as state from "./state.mjs";
 import { renderDigest, renderSummaryJson, renderCard, buildAgentReadme } from "./pipeline/render.mjs";
@@ -135,8 +138,10 @@ function todayStamp() {
   return new Date().toISOString().slice(0, 10);
 }
 
-// --- Workspace writer (tar-pipe into docker volume, see volume-writer.mjs) ---
-async function writeToVolume(digestMd, cards, stamp, summaryJson, drafts) {
+// --- Digest publisher: openclaw volume tar-pipe and/or a plain local dir ---
+// config.publish decides where the same file set goes: volume (host-side
+// sandbox deployment), localDir (dockerized/standalone deployment), or both.
+async function writeDigestFiles(digestMd, cards, stamp, summaryJson, drafts) {
   const files = [
     { relPath: "README.md", content: buildAgentReadme(config) },
     { relPath: `digest/${stamp}.md`, content: digestMd },
@@ -152,12 +157,28 @@ async function writeToVolume(digestMd, cards, stamp, summaryJson, drafts) {
     }
   }
 
-  await writeFilesToVolume({
-    volume: config.workspaceVolume,
-    targetPath: config.workspacePath,
-    stagingDir: STAGING_DIR,
-    files,
-  });
+  if (config.publish.volume) {
+    await writeFilesToVolume({
+      volume: config.workspaceVolume,
+      targetPath: config.workspacePath,
+      stagingDir: STAGING_DIR,
+      files,
+    });
+  }
+
+  const localDir = config.publish.localDir;
+  if (localDir) {
+    for (const { relPath, content } of files) {
+      const dest = resolve(localDir, relPath);
+      mkdirSync(dirname(dest), { recursive: true });
+      writeFileSync(dest, stripEmDash(content));
+    }
+    console.error(`[publish] wrote ${files.length} file(s) under ${localDir}`);
+  }
+
+  if (!config.publish.volume && !localDir) {
+    console.error("[publish] WARNING: publish.volume=false and publish.localDir unset — digest written nowhere");
+  }
 }
 
 // --- Main ---
@@ -243,7 +264,7 @@ async function main() {
     const latestDigestMd = renderDigest(stamp, allTodayRankings, COLIBRI_IN_CHAIN, config);
     const latestSummaryJson = renderSummaryJson(allTodayRankings, config.output.topNPerTrack, config.tracks);
     const cards = newRankings.map(r => ({ id: r.id, content: renderCard(r, config.output.cardExcerptChars) }));
-    await writeToVolume(latestDigestMd, cards, stamp, latestSummaryJson, []);
+    await writeDigestFiles(latestDigestMd, cards, stamp, latestSummaryJson, []);
     console.error(`[main] streamed ${newRankings.length} new ranking(s) to digest (${allTodayRankings.length} total today)`);
   }
 
@@ -281,7 +302,7 @@ async function main() {
   } else if (DRAFTS > 0 && !NO_COLIBRI) {
     const drafts = await draftTopN(config, rankings, DRAFTS);
     if (drafts.length) {
-      await writeToVolume(
+      await writeDigestFiles(
         renderDigest(stamp, allTodayRankings, COLIBRI_IN_CHAIN, config),
         [], stamp, renderSummaryJson(allTodayRankings, config.output.topNPerTrack, config.tracks), drafts,
       );

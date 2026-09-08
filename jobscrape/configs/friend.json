@@ -1,0 +1,8 @@
+{
+  "colibri": {
+    "baseUrl": "http://host.docker.internal:8000/v1",
+    "mcpHealthUrl": "http://host.docker.internal:8000/health"
+  },
+  "gemma": { "baseUrl": "http://host.docker.internal:11434/v1" },
+  "publish": { "volume": false, "localDir": "/app/digests" }
+}

@@ -103,10 +103,25 @@ export const DEFAULTS = {
     tableCellChars: 60,
   },
 
+  // Digest publish targets. volume: tar-pipe into the openclaw workspace
+  // volume (the sandbox-stack deployment — needs the host docker CLI + tar).
+  // localDir: plain filesystem directory for dockerized/standalone machines
+  // (null = off). Both may be enabled at once; volume=false with no localDir
+  // writes the digest nowhere.
+  publish: {
+    volume: true,
+    localDir: null,
+  },
+
   // Colibri HTTP client + generation parameters. generation.* must stay
   // byte-stable once prompts are cached (see pipeline/prompt.mjs) — changing
   // these costs one full re-prefill of the local model.
   colibri: {
+    // false = this machine has no colibri engine — every chunk ranks via the
+    // gemma fallback directly (entries carry ranker:"gemma"), with no doomed
+    // colibri call ahead of it. The scorer chain keeps its shape: the
+    // keyword-gate pre-filter and terminal heuristic still apply.
+    enabled: true,
     baseUrl: "http://localhost:8000/v1",
     model: "glm-5.2-colibri",
     timeoutMs: 900000,
@@ -237,6 +252,7 @@ export function applyLegacyAliases(raw) {
 // would be wrong).
 const TYPES = {
   "fetch.timeoutMs": "intOrNull",
+  "publish.localDir": "stringOrNull",
   "colibri.mcpHealthUrl": "stringOrNull",
   "colibri.heuristicSkipThreshold": "intOrNull",
   "selection.unknownSourcePriority": "nonNegInt",

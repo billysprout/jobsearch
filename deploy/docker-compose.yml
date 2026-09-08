@@ -1,0 +1,68 @@
+# deploy/docker-compose.yml — standalone jobscrape stack for machines that
+# don't run the openclaw-sandbox stack (the installer kit's deployment).
+#
+# Three services, one bridge network (job boards are public GETs; no squid
+# egress here — that machinery belongs to the sandbox stack):
+#   scraper            scheduler.mjs daily loop -> scrape.mjs --once
+#   jobscrape-config   config/status API, :8790 token-gated, edits configs/
+#   jobscrape-frontend loopback-only publisher for the status page
+#
+# Engines stay on the HOST (GPU-free but RAM-hungry; WSL2 networking would
+# only add pain): colibri :8000 (optional) and Ollama :11434, reached via
+# host.docker.internal. Digests land in ./digests on the host.
+#
+# Run: docker compose up -d --build   (from this directory)
+# One-shot run: docker compose run --rm scraper node scrape.mjs --once
+name: jobscrape
+
+services:
+  scraper:
+    build:
+      context: ../jobscrape
+      dockerfile: Dockerfile.scraper
+    restart: unless-stopped
+    environment:
+      JOBSCRAPE_PROFILE: friend
+      JOBSCRAPE_STATE_DIR: /app/state
+      JOBSCRAPE_RUN_AT: ${JOBSCRAPE_RUN_AT:-07:00}
+      JOBSCRAPE_RUN_ON_START: ${JOBSCRAPE_RUN_ON_START:-}
+    volumes:
+      # rw: the config API edits these same files from the other container.
+      - ../jobscrape/configs:/app/configs
+      - ./state:/app/state
+      - ./logs:/app/logs
+      - ./digests:/app/digests
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  jobscrape-config:
+    build:
+      context: ../jobscrape
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Fail-closed: the server refuses to start without a token.
+      JOBSCRAPE_CONFIG_TOKEN: ${JOBSCRAPE_CONFIG_TOKEN:?JOBSCRAPE_CONFIG_TOKEN missing - run setup or copy .env.example}
+      JOBSCRAPE_CONFIG_PORT: 8790
+      # The status view must merge the same layers the scraper runs with.
+      JOBSCRAPE_PROFILE: friend
+    volumes:
+      - ../jobscrape/configs:/app/configs
+      - ./state:/app/state:ro
+      - ./logs:/app/logs:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:8790/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  jobscrape-frontend:
+    image: alpine/socat:latest
+    command: ["TCP-LISTEN:8790,fork,reuseaddr", "TCP-CONNECT:jobscrape-config:8790"]
+    restart: unless-stopped
+    ports:
+      # Loopback only — the API is token-gated but never needs LAN exposure.
+      - "127.0.0.1:${JOBSCRAPE_CONFIG_PORT:-8790}:8790"
+    depends_on:
+      jobscrape-config:
+        condition: service_healthy

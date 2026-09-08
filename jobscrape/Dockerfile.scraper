@@ -1,0 +1,28 @@
+# jobscrape/Dockerfile.scraper — the scraper + scheduler container for
+# standalone deployments (see ../deploy/docker-compose.yml). The config-server
+# image (./Dockerfile) deliberately copies only its own three modules; this
+# one needs the whole pipeline. configs/, state/, logs/ are NOT baked in —
+# they arrive as bind mounts at runtime (jobscrape/.dockerignore keeps
+# personal data out of the build context anyway).
+#
+# Engines are NOT in this image: colibri and Ollama run on the host and are
+# reached via host.docker.internal (extra_hosts in the compose file).
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+
+# pdfkit (draft.mjs -> pdf.mjs) is statically imported by scrape.mjs, so the
+# dep is in the module graph even for runs without --drafts. Pure JS, no
+# native builds — plain npm install is enough on alpine.
+COPY package.json ./
+RUN npm install --omit=dev && npm cache clean --force
+
+COPY *.mjs ./
+COPY pipeline ./pipeline
+COPY filters ./filters
+COPY scorers ./scorers
+
+# scheduler.mjs loops daily and execs `node scrape.mjs --once` (see
+# scheduler.mjs); override the command for one-shot runs:
+#   docker compose run --rm scraper node scrape.mjs --once --dry-run --limit 3
+CMD ["node", "scheduler.mjs"]

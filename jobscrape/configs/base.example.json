@@ -1,0 +1,28 @@
+{
+  "tracks": {
+    "software-engineering": {
+      "label": "Software Engineering",
+      "description": "Backend, frontend, or full-stack software engineering roles building products or platforms.",
+      "keywords": ["software engineer", "backend", "frontend", "full stack", "full-stack", "platform engineer", "developer", "javascript", "typescript", "python", "golang"]
+    }
+  },
+  "sources": {
+    "greenhouse": { "enabled": true },
+    "lever": { "enabled": true },
+    "workable": { "enabled": true },
+    "ashby": { "enabled": true },
+    "remotive": { "enabled": true },
+    "remoteok": { "enabled": true },
+    "hn": { "enabled": true },
+    "wwr": { "enabled": false }
+  },
+  "ats": {
+    "greenhouse": {},
+    "lever": {},
+    "workable": {},
+    "ashby": {}
+  },
+  "filters": ["keyword-match", "recency"],
+  "filterConfig": { "recency": { "maxAgeDays": 30 } },
+  "selection": { "limit": 10, "reservedSlots": 3 }
+}

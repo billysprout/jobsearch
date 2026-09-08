@@ -6,7 +6,10 @@
 // order is colibri → gemma fallback (config.gemma — Ollama on the host) →
 // defer: only when BOTH engines fail is the chunk reported via colibriOk:false
 // with no ranking for the caller (scrape.mjs) to defer to the pending-colibri
-// queue — never permanently burned into the digest with a degraded score. A
+// queue — never permanently burned into the digest with a degraded score.
+// config.colibri.enabled:false short-circuits the colibri leg — gemma ranks
+// every chunk as the primary engine (ranker:"gemma"), no colibri call at all.
+// A
 // gemma-fallback success is a real ranking (entries carry ranker:"gemma"), not
 // a degraded one. heuristicRankings() below is still used for explicit
 // --no-colibri runs and the heuristicSkipThreshold pre-gate
@@ -39,6 +42,11 @@ export async function rankPostings(config, postings, onChunkRanked) {
 
   const { baseUrl, model, timeoutMs, chunkSize } = config.colibri;
   const generation = config.colibri.generation;
+  // colibri.enabled:false = the machine has no colibri engine — every chunk
+  // goes straight to the gemma fallback below, same plumbing as an error
+  // path but without a doomed colibri call ahead of it.
+  const colibriEnabled = config.colibri.enabled !== false;
+  const gemma = config.gemma;
   // Taxonomy derives from config.tracks — see pipeline/prompt.mjs for why
   // the generated prompt's bytes matter (KV cache) and why tracks sort
   // alphabetically.
@@ -56,11 +64,51 @@ export async function rankPostings(config, postings, onChunkRanked) {
     }
   }
 
+  // The gemma leg of the fallback chain — shared by the colibri-error path
+  // and the colibri-disabled path. Returns true if the chunk was ranked;
+  // false means the caller defers it (both engines gone, or gemma produced
+  // garbage). A gemma response with no parseable rankings defers rather
+  // than falling through to the terminal heuristic — tomorrow's colibri
+  // retry beats burning a heuristic score on fallback-engine garbage.
+  async function rankViaGemma(chunk, userPrompt, reason) {
+    if (!gemma?.enabled) {
+      console.error(`${reason} — deferring chunk for retry (no heuristic fallback)`);
+      return false;
+    }
+    console.error(`${reason} — trying gemma fallback (${gemma.model})`);
+    const gt0 = Date.now();
+    try {
+      const { content, usage } = await chatCompletionStream(
+        { baseUrl: gemma.baseUrl, model: gemma.model, timeoutMs: gemma.timeoutMs, maxTokens: gemma.maxTokens },
+        generation.temperature, systemPrompt, userPrompt,
+      );
+      logUsage(usage, gt0);
+
+      const parsed = parseRankingResponse(content, chunk.map(p => p.id), whitelist, generation);
+      if (!parsed.length) throw new Error("no parseable rankings in gemma response");
+      for (const r of parsed) r.ranker = "gemma";
+      allRankings.push(...parsed);
+      console.error(`[colibri] gemma fallback ranked ${parsed.length}/${chunk.length} posting(s) [elapsed=${((Date.now() - gt0) / 1000).toFixed(1)}s]`);
+      await publishChunk(parsed, chunk, true);
+      return true;
+    } catch (gerr) {
+      console.error(`[colibri] gemma fallback also failed: ${gerr.message} — deferring chunk for retry (no heuristic fallback)`);
+      return false;
+    }
+  }
+
   for (let i = 0; i < postings.length; i += chunkSize) {
     const chunk = postings.slice(i, i + chunkSize);
     const userPrompt = buildUserPrompt(chunk, generation);
 
     await waitForMcpColibriIdle(config);
+
+    // Engine disabled by config — gemma is the primary, not a fallback.
+    if (!colibriEnabled) {
+      const ranked = await rankViaGemma(chunk, userPrompt, `[colibri] colibri disabled (config.colibri.enabled:false)`);
+      if (!ranked) await publishChunk([], chunk, false);
+      continue;
+    }
 
     try {
       console.error(`[colibri] chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(postings.length / chunkSize)}: ${chunk.length} postings, calling ${model}...`, `[t0=${Date.now()}]`);
@@ -79,37 +127,12 @@ export async function rankPostings(config, postings, onChunkRanked) {
       await publishChunk(parsed, chunk, true);
 
     } catch (err) {
-      const gemma = config.gemma;
-      if (gemma?.enabled) {
-        console.error(`[colibri] ERROR: ${err.message} — trying gemma fallback (${gemma.model})`);
-        const gt0 = Date.now();
-        try {
-          const { content, usage } = await chatCompletionStream(
-            { baseUrl: gemma.baseUrl, model: gemma.model, timeoutMs: gemma.timeoutMs, maxTokens: gemma.maxTokens },
-            generation.temperature, systemPrompt, userPrompt,
-          );
-          logUsage(usage, gt0);
-
-          const parsed = parseRankingResponse(content, chunk.map(p => p.id), whitelist, generation);
-          // Unlike a malformed colibri success (which falls through to the
-          // terminal heuristic scorer), a gemma response with no parseable
-          // rankings defers — tomorrow's colibri retry beats burning a
-          // heuristic score on fallback-engine garbage.
-          if (!parsed.length) throw new Error("no parseable rankings in gemma response");
-          for (const r of parsed) r.ranker = "gemma";
-          allRankings.push(...parsed);
-          console.error(`[colibri] gemma fallback ranked ${parsed.length}/${chunk.length} posting(s) [elapsed=${((Date.now() - gt0) / 1000).toFixed(1)}s]`);
-          await publishChunk(parsed, chunk, true);
-          continue;
-        } catch (gerr) {
-          console.error(`[colibri] gemma fallback also failed: ${gerr.message} — deferring chunk for retry (no heuristic fallback)`);
-        }
-      } else {
-        console.error(`[colibri] ERROR: ${err.message} — deferring chunk for retry (no heuristic fallback)`);
+      const ranked = await rankViaGemma(chunk, userPrompt, `[colibri] ERROR: ${err.message}`);
+      if (!ranked) {
+        colibriOnline = false;
+        // No ranking produced — caller defers this chunk to the pending queue.
+        await publishChunk([], chunk, false);
       }
-      colibriOnline = false;
-      // No ranking produced — caller defers this chunk to the pending queue.
-      await publishChunk([], chunk, false);
     }
   }
 

@@ -34,9 +34,11 @@ export function renderDigest(dateStr, ranked, colibriOnline, config) {
   let md = `# Job Digest — ${dateStr}\n\n`;
   if (colibriOnline) {
     const usedGemma = ranked.some(r => r.ranker === "gemma");
-    const engine = usedGemma
-      ? `colibri (${config.colibri.model}) + gemma fallback (${config.gemma.model})`
-      : `colibri (${config.colibri.model})`;
+    const engine = config.colibri?.enabled === false
+      ? `gemma (${config.gemma.model})`
+      : usedGemma
+        ? `colibri (${config.colibri.model}) + gemma fallback (${config.gemma.model})`
+        : `colibri (${config.colibri.model})`;
     md += `Ranked by **${engine}**. ${ranked.length} postings scored.\n\n`;
   } else {
     md += `> **colibri: OFFLINE (heuristic scores)** -- keyword-based only.\n\n`;
