@@ -28,9 +28,10 @@
 //      high-confidence keyword matches skip colibri, colibri ranks the rest
 //      and every ranked chunk is persisted + published IMMEDIATELY (a run
 //      killed by the scheduled task's timeout loses at most the chunk in
-//      flight), outage-hit chunks defer to state/pending-colibri.json for a
-//      real retry, and malformed-response gaps fall to the terminal keyword
-//      scorer — see pipeline/registry.mjs for the stage interface
+//      flight), and outage-hit AND malformed-response (parse-0) chunks both
+//      defer to state/pending-colibri.json for a real retry — the terminal
+//      keyword scorer now only fires under --no-colibri
+//      — see pipeline/registry.mjs for the stage interface
 //   6. optional cover-letter drafting (--drafts), on top of the
 //      already-published digest
 //
@@ -41,6 +42,33 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// --- Run log: tee all console output to logs/run-<UTC date>.log ---
+// Installed FIRST, before config load — a fatal ConfigError at 07:00 must
+// leave a log behind, not just an absent digest. The scheduled task registers
+// no stdout redirection (New-ScheduledTaskAction can't), which is why no
+// run-2026-09-07.log existed despite the task firing — the drain log only
+// existed because that run was started by hand. Teeing here covers scheduled
+// AND manual runs, and because writes are synchronous, a killed run still
+// leaves everything up to the kill on disk. Append mode: same-day reruns
+// concatenate (run starts are marked by the [main] === line). UTC date,
+// matching todayStamp()/digest naming.
+import { appendFileSync, mkdirSync } from "node:fs";
+import { format } from "node:util";
+{
+  const logDir = resolve(__dirname, "logs");
+  mkdirSync(logDir, { recursive: true });
+  const runLogPath = resolve(logDir, `run-${new Date().toISOString().slice(0, 10)}.log`);
+  for (const method of ["log", "error"]) {
+    const write = console[method].bind(console);
+    console[method] = (...args) => {
+      write(...args);
+      try {
+        appendFileSync(runLogPath, args.map(a => (typeof a === "string" ? a : format(a))).join(" ") + "\n");
+      } catch { /* logging must never kill a run */ }
+    };
+  }
+}
 
 import { fetchAll } from "./sources.mjs";
 import { draftTopN } from "./draft.mjs";

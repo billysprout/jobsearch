@@ -7,9 +7,14 @@
 // heuristic-scored here, so a colibri outage delays a posting's appearance
 // (it sits in state/pending-colibri.json for a real retry) instead of
 // permanently burning it into the digest with a degraded score. A chunk that
-// SUCCEEDS but yields no parseable rankings is neither deferred nor ranked —
-// it falls through to the next scorer via `missed` (the "malformed response,
-// not an outage" path).
+// SUCCEEDS but yields no parseable rankings (malformed/garbage JSON) is
+// DEFERRED TOO, same as an outage: the 2026-09-07 audit showed the old
+// "fall through to the terminal heuristic" path never marked the posting
+// seen (the terminal scorer publishes with empty sourcePostings) and never
+// removed it from the pending queue — so parse-0 postings re-ranked every
+// run (300-780s of colibri each) and accrued one duplicate heuristic digest
+// entry per run (gh-krafton-8581524002 did it three runs straight). This
+// mirrors the gemma fallback's parse-empty-defers rule in colibri.mjs.
 //
 // SCORER interface (see pipeline/registry.mjs):
 //   score(postings, params, ctx) -> { rankings, deferred, missed, online }
@@ -37,6 +42,16 @@ export async function score(postings, params, ctx) {
       deferred.push(...chunk);
       ctx.defer(chunk);
       console.error(`[main] colibri offline — queued ${chunk.length} posting(s) for retry next run (pending: ${ctx.pendingSize()})`);
+      return;
+    }
+    if (!parsed.length) {
+      // HTTP success, zero parseable rankings — malformed response, not an
+      // outage (so the chain banner stays honest), but deferred all the same
+      // (see header): a real retry beats a heuristic score that leaves the
+      // posting unseen and re-ranked forever.
+      deferred.push(...chunk);
+      ctx.defer(chunk);
+      console.error(`[colibri] chunk parsed 0 rankings (malformed response) — queued ${chunk.length} posting(s) for retry next run (pending: ${ctx.pendingSize()})`);
       return;
     }
     // chunkSize is always 1 (config.colibri.chunkSize), so the single

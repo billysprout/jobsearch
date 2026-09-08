@@ -216,17 +216,18 @@ function logUsage(usage, t0) {
   else console.error(`[colibri] no usage in response`, elapsed);
 }
 
-// Best-effort coordination with the in-sandbox `ask_colibri` MCP tool
-// (mcp-colibri/), which hits this same colibri process from inside the
-// gateway container. Colibri serializes requests (disk-streamed experts,
-// one at a time) — if this host-side batch run and an agent's ask_colibri
-// call land at the same time, one silently queues behind the other with no
-// indication why. mcp-colibri's own /health reports jobs_running; it's
-// published to 127.0.0.1 (loopback only, read-only status, no auth) so this
-// host-side script can check it. Fails open: if the health URL is
-// unreachable (feature not deployed, container down, etc.) this is a no-op
-// after one quick attempt — never blocks a run on infrastructure that isn't
-// there. Not a lock, just politeness: waits briefly, then proceeds anyway.
+// Best-effort coordination before each engine call. Colibri serializes
+// requests (one generation at a time) — if this host-side batch run and
+// another engine consumer (an agent's ask_colibri call, serve-mode traffic)
+// land at the same time, one silently queues behind the other. The colibri
+// serve API exposes an (undocumented) GET /health whose `scheduler` block
+// counts active+queued generations — the ONLY accurate busy signal:
+// mcp-colibri's /health jobs_running counts just ask_colibri MCP jobs and
+// read 0 through an entire live ranking (2026-09-07 probe). Both shapes are
+// accepted so mcpHealthUrl can point at either. Fails open: an unreachable
+// URL (engine down, feature not deployed) is a no-op after one quick
+// attempt — never blocks a run on infrastructure that isn't there. Not a
+// lock, just politeness: waits briefly, then proceeds anyway.
 async function waitForMcpColibriIdle(config) {
   const healthUrl = config.colibri?.mcpHealthUrl;
   if (!healthUrl) return;
@@ -240,16 +241,21 @@ async function waitForMcpColibriIdle(config) {
       if (!res.ok) return; // unreachable/misconfigured — don't block on it
       health = await res.json();
     } catch {
-      return; // mcp-colibri not reachable from the host — nothing to coordinate with
+      return; // health endpoint not reachable from the host — nothing to coordinate with
     }
 
-    if (!health.jobs_running) return; // idle, go ahead
+    const busy = typeof health.jobs_running === "number"
+      ? health.jobs_running
+      : health.scheduler
+        ? (health.scheduler.active || 0) + (health.scheduler.queued || 0)
+        : 0;
+    if (!busy) return; // idle, go ahead
 
     if (attempt < maxAttempts) {
-      console.error(`[colibri] mcp-colibri reports ${health.jobs_running} job(s) running via ask_colibri — waiting ${pollDelayMs / 1000}s before firing (attempt ${attempt}/${maxAttempts})`);
+      console.error(`[colibri] engine reports ${busy} generation(s) active/queued — waiting ${pollDelayMs / 1000}s before firing (attempt ${attempt}/${maxAttempts})`);
       await new Promise(r => setTimeout(r, pollDelayMs));
     } else {
-      console.error(`[colibri] mcp-colibri still busy after ${maxAttempts} checks — proceeding anyway (best-effort only, not a hard lock)`);
+      console.error(`[colibri] engine still busy after ${maxAttempts} checks — proceeding anyway (best-effort only, not a hard lock)`);
     }
   }
 }
