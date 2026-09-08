@@ -39,7 +39,17 @@ export function renderDigest(dateStr, ranked, colibriOnline, config) {
       : usedGemma
         ? `colibri (${config.colibri.model}) + gemma fallback (${config.gemma.model})`
         : `colibri (${config.colibri.model})`;
-    md += `Ranked by **${engine}**. ${ranked.length} postings scored.\n\n`;
+    // Per-engine counts in the header — the per-entry attribution is the
+    // Engine column below, but the one-line rollup answers "did the fallback
+    // fire today?" without reading the table.
+    const counts = [];
+    const nColibri = ranked.filter(r => r.ranker === "colibri").length;
+    const nGemma = ranked.filter(r => r.ranker === "gemma").length;
+    if (nColibri) counts.push(`${nColibri} by colibri`);
+    if (nGemma) counts.push(`${nGemma} by gemma`);
+    const nKeyword = ranked.length - nColibri - nGemma;
+    if (nKeyword) counts.push(`${nKeyword} keyword-only`);
+    md += `Ranked by **${engine}**. ${ranked.length} postings scored${counts.length ? ` (${counts.join(", ")})` : ""}.\n\n`;
   } else {
     md += `> **colibri: OFFLINE (heuristic scores)** -- keyword-based only.\n\n`;
   }
@@ -49,11 +59,14 @@ export function renderDigest(dateStr, ranked, colibriOnline, config) {
     items.sort((a, b) => b.score - a.score);
     const label = trackLabels[track] || track;
     md += `## ${label} (${items.length})\n\n`;
-    md += `| Score | Company | Title | Location | Fit |\n`;
-    md += `|------:|---------|-------|----------|-----|\n`;
+    md += `| Score | Company | Title | Location | Fit | Engine |\n`;
+    md += `|------:|---------|-------|----------|-----|--------|\n`;
     for (const r of items) {
       const posting = r._posting;
-      md += `| ${r.score} | ${esc(posting.company, config.output.tableCellChars)} | [${esc(posting.title, config.output.tableCellChars)}](${posting.url}) | ${esc(posting.location, config.output.tableCellChars)} | ${esc(r.one_line, config.output.tableCellChars)} |\n`;
+      // Engine attribution per entry: colibri/gemma when an engine scored
+      // it, blank for keyword-gate/terminal-heuristic fills (their Fit text
+      // already says "Keyword match").
+      md += `| ${r.score} | ${esc(posting.company, config.output.tableCellChars)} | [${esc(posting.title, config.output.tableCellChars)}](${posting.url}) | ${esc(posting.location, config.output.tableCellChars)} | ${esc(r.one_line, config.output.tableCellChars)} | ${r.ranker || ""} |\n`;
     }
     md += `\n`;
   }
@@ -105,6 +118,7 @@ export function renderCard(r, cardExcerptChars = 2000) {
     + `- **Salary**: ${p.salary || "N/A"}\n`
     + `- **URL**: ${p.url}\n`
     + `- **Score**: ${r.score}/100 (${r.track})\n`
+    + (r.ranker ? `- **Ranker**: ${r.ranker}\n` : "")
     + `- **Fit**: ${r.one_line}\n\n`
     + `## Fit Notes\n${r.fit_notes}\n\n`
     + `## Job Description (excerpt)\n${(p.bodyText || "").substring(0, cardExcerptChars)}\n`;
