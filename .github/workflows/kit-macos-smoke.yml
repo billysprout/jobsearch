@@ -97,7 +97,8 @@ jobs:
 
       # Covers: brew ollama -> gemma pull -> .env generation -> config seed ->
       # compose up --build -> the built-in dry-run probe. The colibri prompt
-      # reads EOF on CI and defaults to No.
+      # times out after 10s on CI (steps get a silent stdin pipe, not EOF)
+      # and defaults to No.
       - name: Run setup.sh end to end
         working-directory: ${{ env.KIT }}
         run: bash setup.sh --at 07:00
