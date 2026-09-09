@@ -70,21 +70,22 @@ jobs:
 
       # Headless docker workaround: macOS runners ship no Docker, and Docker
       # Desktop cannot start headless in CI. colima is a plain Linux VM.
-      # ARM tries Apple's Virtualization.framework first (M1-native, no qemu;
-      # qemu-on-M1 is what killed the first arm64 run) and falls back to
-      # qemu. Intel goes straight to qemu - the runner VM lacks the nested
-      # virt VZ needs, and qemu there is proven (first run, Intel leg passed
-      # this step).
+      # IMPORTANT: colima >= 0.10 defaults to the VZ driver on macOS 15 ARM,
+      # and VZ cannot boot on the GitHub ARM runner (run #2: both explicit
+      # and default VZ died instantly at "Starting VZ" - the flagless
+      # "qemu fallback" also booted VZ, so QEMU had never actually been
+      # tried). Force --vm-type qemu on ARM; Intel's default already IS
+      # qemu and passed run #1.
       - name: Headless docker (colima + docker CLI + compose plugin)
         run: |
           brew install colima docker docker-compose
           mkdir -p "$HOME/.docker/cli-plugins"
           ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" "$HOME/.docker/cli-plugins/docker-compose"
           if [ "$(uname -m)" = "arm64" ]; then
-            colima start --cpu 3 --memory 6 --disk 40 --vm-type vz \
+            colima start --cpu 3 --memory 6 --disk 40 --vm-type qemu \
               || { colima delete -f >/dev/null 2>&1 || true
-                   echo "vz start failed - retrying with qemu"
-                   colima start --cpu 3 --memory 6 --disk 40; }
+                   echo "first qemu start failed - retrying once"
+                   colima start --cpu 3 --memory 6 --disk 40 --vm-type qemu; }
           else
             colima start --cpu 3 --memory 6 --disk 40
           fi

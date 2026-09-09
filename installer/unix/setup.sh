@@ -86,12 +86,16 @@ else
   echo "    pulling gemma4:e2b (a few GB, one time)..."
   ollama pull gemma4:e2b || warn "ollama pull failed - ranking falls back to heuristics until this succeeds"
   if curl -s --max-time 5 http://127.0.0.1:11434/api/tags | grep -q "gemma4:e2b"; then
+    # Temp file, not `-f -`: stdin Modelfiles proved unreliable on the CI
+    # runner's ollama ("no Modelfile or safetensors files found").
+    MF="$(mktemp)"
+    printf 'FROM gemma4:e2b\nPARAMETER num_ctx 65536\n' > "$MF"
     echo "    creating the 64k-context variant (gemma4-e2b-64k)..."
-    ollama create gemma4-e2b-64k -f - <<'MODELFILE'
-FROM gemma4:e2b
-PARAMETER num_ctx 65536
-MODELFILE
-    ok "gemma4-e2b-64k ready (base gemma4:e2b + num_ctx 65536)"
+    ollama create gemma4-e2b-64k -f "$MF" \
+      || warn "ollama create failed - ranking falls back to heuristics until this succeeds"
+    rm -f "$MF"
+    curl -s --max-time 5 http://127.0.0.1:11434/api/tags | grep -q "gemma4-e2b-64k" \
+      && ok "gemma4-e2b-64k ready (base gemma4:e2b + num_ctx 65536)"
   fi
 fi
 
