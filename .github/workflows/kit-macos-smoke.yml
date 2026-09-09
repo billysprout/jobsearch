@@ -122,6 +122,13 @@ jobs:
           curl -fsS "http://127.0.0.1:${PORT}/health"
           code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/?token=${TOKEN}")"
           [ "$code" = "200" ] || { echo "::error::status page returned ${code}"; exit 1; }
+          # Chat config (gemma-backed, same ollama the scrape step used): CI
+          # asserts the round trip answers with structured JSON — a
+          # question-only prompt, so no config mutation in CI. Semantic
+          # correctness ("block X" really blocks X) is probed on real hardware.
+          chat="$(curl -s -X POST "http://127.0.0.1:${PORT}/chat?token=${TOKEN}" -H 'Content-Type: application/json' -d '{"message":"what tracks do you know about?"}')"
+          echo "${chat}"
+          echo "${chat}" | grep -q '"reply"' || { echo "::error::/chat did not answer: ${chat}"; exit 1; }
 
       # Negative test: install-colibri.sh checks free disk BEFORE downloading
       # anything - on a ~70 GB runner it must exit nonzero at the gate.

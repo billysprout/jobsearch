@@ -50,6 +50,10 @@ services:
       - ../jobscrape/configs:/app/configs
       - ./state:/app/state:ro
       - ./logs:/app/logs:ro
+    # The status-page chat calls the host's Ollama (same reason the scraper
+    # needs this): colima has no built-in host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:8790/health"]
       interval: 30s
