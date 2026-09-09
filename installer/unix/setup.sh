@@ -79,9 +79,20 @@ step "3/7 gemma4 model (fallback ranker)"
 if curl -s --max-time 5 http://127.0.0.1:11434/api/tags | grep -q "gemma4-e2b-64k"; then
   ok "gemma4-e2b-64k already present"
 else
-  echo "    pulling gemma4-e2b-64k (a few GB, one time)..."
-  ollama pull gemma4-e2b-64k
-  ok "gemma4-e2b-64k pulled"
+  # gemma4-e2b-64k is NOT a registry model - it's a local 64k-context variant
+  # of the public gemma4:e2b (CI-proven 2026-09-09: `ollama pull
+  # gemma4-e2b-64k` fails on every machine except the one that created the
+  # variant by hand). Pull the public base, then build the variant.
+  echo "    pulling gemma4:e2b (a few GB, one time)..."
+  ollama pull gemma4:e2b || warn "ollama pull failed - ranking falls back to heuristics until this succeeds"
+  if curl -s --max-time 5 http://127.0.0.1:11434/api/tags | grep -q "gemma4:e2b"; then
+    echo "    creating the 64k-context variant (gemma4-e2b-64k)..."
+    ollama create gemma4-e2b-64k -f - <<'MODELFILE'
+FROM gemma4:e2b
+PARAMETER num_ctx 65536
+MODELFILE
+    ok "gemma4-e2b-64k ready (base gemma4:e2b + num_ctx 65536)"
+  fi
 fi
 
 # --- 4/7 .env -----------------------------------------------------------------

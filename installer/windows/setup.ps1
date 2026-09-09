@@ -120,10 +120,22 @@ try {
 } catch { }
 if ($haveGemma) { Write-Ok "gemma4-e2b-64k already present" }
 elseif ($ollamaUp) {
-  Write-Host "    Pulling gemma4-e2b-64k (a few GB, one time)..."
-  ollama pull gemma4-e2b-64k
+  # gemma4-e2b-64k is not a registry model - it is a local 64k-context
+  # variant of the public gemma4:e2b (CI-proven 2026-09-09: `ollama pull
+  # gemma4-e2b-64k` fails everywhere except the machine that created the
+  # variant by hand). Pull the public base, then build the variant.
+  Write-Host "    Pulling gemma4:e2b (a few GB, one time)..."
+  ollama pull gemma4:e2b
   if ($LASTEXITCODE -ne 0) { Write-Warn2 "ollama pull failed - ranking falls back to heuristics until this succeeds"; }
-  else { Write-Ok "gemma4-e2b-64k pulled" }
+  else {
+    Write-Host "    Creating the 64k-context variant (gemma4-e2b-64k)..."
+    $mf = Join-Path $env:TEMP "gemma4-64k.modelfile"
+    Set-Content -Path $mf -Value "FROM gemma4:e2b`r`nPARAMETER num_ctx 65536" -Encoding Ascii
+    ollama create gemma4-e2b-64k -f $mf
+    Remove-Item $mf -Force
+    if ($LASTEXITCODE -ne 0) { Write-Warn2 "ollama create failed - ranking falls back to heuristics until this succeeds"; }
+    else { Write-Ok "gemma4-e2b-64k ready (base gemma4:e2b + num_ctx 65536)" }
+  }
 }
 else { Write-Warn2 "skipping model pull - no Ollama server" }
 
