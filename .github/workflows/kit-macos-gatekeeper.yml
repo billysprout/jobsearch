@@ -1,0 +1,88 @@
+# kit-macos-gatekeeper - answers "will the kit get flagged by macOS antivirus?"
+#
+# What macOS actually points at the kit, and what this job proves:
+#   Gatekeeper/XProtect never evaluate .sh/.ps1 scripts - they gate Mach-O
+#   binaries and .app bundles arriving with the com.apple.quarantine xattr
+#   (what browsers attach to downloads). The kit ships zero binaries; every
+#   engine comes from brew/ollama/docker's own signed channels. So the honest
+#   test is: give the zip the browser quarantine xattr, propagate it to the
+#   extracted tree the way Finder's Archive Utility does, and prove our
+#   scripts still execute and nothing flags.
+#   Then a real signature pass: ClamAV (fresh DB) over zip + tree - the
+#   closest scriptable proxy for third-party AV engines.
+#
+# Manual trigger only. Single ARM leg; no docker/colima needed, so this is
+# one of the cheap mac jobs (~5 min).
+name: kit-macos-gatekeeper
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gatekeeper:
+    name: quarantine + exec + clamav
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the kit zip (the exact deliverable friends receive)
+        shell: pwsh
+        run: ./installer/build-kit.ps1
+
+      - name: Simulate a browser download (attach quarantine xattr)
+        run: |
+          TMP="$RUNNER_TEMP/gk"
+          rm -rf "$TMP" && mkdir -p "$TMP/incoming"
+          cp installer/dist/jobscrape-kit-*.zip "$TMP/incoming/jobscrape-kit.zip"
+          # What Safari/Chrome attach on download: <flags>;<epoch>;<agent>;<uuid>
+          xattr -w com.apple.quarantine "0081;$(date +%s);Safari;C53B2E5E-1001-4A0F-9A0D-9E90B26A0A00" "$TMP/incoming/jobscrape-kit.zip"
+          echo "--- quarantine xattr on the zip:"
+          xattr -l "$TMP/incoming/jobscrape-kit.zip"
+
+      - name: Extract + propagate quarantine the way Finder does
+        run: |
+          TMP="$RUNNER_TEMP/gk"
+          KIT="$TMP/kit"
+          mkdir -p "$KIT"
+          tar -x -f "$TMP/incoming/jobscrape-kit.zip" -C "$KIT"
+          # CLI unzip does not propagate quarantine; Archive Utility does.
+          # Reproduce Finder's worst case on every extracted file.
+          find "$KIT" -type f -exec xattr -w com.apple.quarantine "0081;$(date +%s);Safari;C53B2E5E-1001-4A0F-9A0D-9E90B26A0A00" {} +
+          echo "--- quarantined files: $(find "$KIT" -type f | xargs -n1 xattr -p com.apple.quarantine 2>/dev/null | wc -l | tr -d ' ')"
+          echo "KIT=$KIT" >> "$GITHUB_ENV"
+
+      - name: Scripts must execute under full quarantine
+        run: |
+          # Gatekeeper would block a Mach-O here ("cannot be opened because
+          # the developer cannot be verified"). A shell script is not in its
+          # jurisdiction: bash must run OUR code and hit OUR arg-parse guard.
+          set +e
+          out="$(bash "$KIT/setup.sh" --bogus-flag 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ] || ! grep -q "unknown flag" <<<"$out"; then
+            echo "::error::setup.sh did not execute normally under quarantine (rc=$rc)"
+            exit 1
+          fi
+          echo "PASS: setup.sh executed under quarantine and failed on our own terms"
+
+      - name: Gatekeeper status (for the record)
+        run: |
+          spctl --status
+          echo "Note: spctl evaluates signed executables/apps, not scripts."
+          echo "The kit contains $(find "$KIT" -type f -exec file {} + | grep -c Mach-O || true) Mach-O binaries - by design."
+
+      - name: ClamAV signature scan over zip + extracted tree
+        run: |
+          brew install clamav
+          FRESHCONF="$(brew --prefix)/etc/clamav/freshclam.conf"
+          [ -f "$FRESHCONF" ] || cp "$FRESHCONF.sample" "$FRESHCONF"
+          freshclam
+          TMP="$RUNNER_TEMP/gk"
+          clamscan --infected --recursive "$TMP/incoming/jobscrape-kit.zip" "$TMP/kit"
+          echo "PASS: ClamAV raised nothing on the kit"
