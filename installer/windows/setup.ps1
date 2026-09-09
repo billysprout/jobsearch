@@ -43,7 +43,12 @@ function Set-ConfigColibriEnabled([string]$KitRoot, [bool]$Value) {
     $colibri | Add-Member -MemberType NoteProperty -Name enabled -Value $Value
     $json | Add-Member -MemberType NoteProperty -Name colibri -Value $colibri
   }
-  $json | ConvertTo-Json -Depth 20 | Set-Content $file -Encoding UTF8
+  # PS 5.1's '-Encoding UTF8' writes a BOM, and Node's JSON.parse rejects a
+  # BOM - the status page 500s with "Unexpected token '﻿'". Write
+  # UTF-8 WITHOUT BOM. (WriteAllText needs an absolute path: $KitRoot is
+  # $PSScriptRoot, so that holds.)
+  $text = $json | ConvertTo-Json -Depth 20
+  [System.IO.File]::WriteAllText($file, $text + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
   Write-Ok "colibri.enabled=$Value in configs/base.json"
 }
 
