@@ -157,6 +157,10 @@ fi
 
 # --- 7/7 stack up + probe --------------------------------------------------------
 step "7/7 starting the stack"
+# Bind-mount sources must pre-exist: for missing paths the daemon creates
+# + chowns them itself, and through colima's VM mount that chown is denied
+# (kit-macos run #6). Docker Desktop tolerates it; pre-create everywhere.
+mkdir -p "$DEPLOY_DIR/state" "$DEPLOY_DIR/logs" "$DEPLOY_DIR/digests"
 ( cd "$DEPLOY_DIR" && docker compose up -d --build )
 ok "stack is up"
 

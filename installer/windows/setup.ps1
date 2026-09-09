@@ -193,6 +193,10 @@ Write-Step "7/7 starting the stack"
 # ---------------------------------------------------------------------------
 Push-Location $DeployDir
 try {
+  # Bind-mount sources must pre-exist: for missing paths the daemon creates
+  # + chowns them itself, and under colima's VM mount that chown is denied
+  # (kit-macos run #6). Docker Desktop tolerates it; pre-create everywhere.
+  New-Item -ItemType Directory -Force -Path state, logs, digests | Out-Null
   docker compose up -d --build
   if ($LASTEXITCODE -ne 0) { throw "docker compose up failed" }
   Write-Ok "stack is up (scraper scheduler + config API + status page)"
