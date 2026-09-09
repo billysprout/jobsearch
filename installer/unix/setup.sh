@@ -129,7 +129,10 @@ step "6/7 colibri engine (optional)"
 if [ "$WITH_COLIBRI" -eq 0 ]; then
   printf '    colibri: ~400 GB weights, 16 GB+ RAM. Without it: gemma ranking.\n'
   printf '    Install colibri too? [y/N] '
-  read -r answer
+  # `read` returns NONZERO at EOF (no stdin: CI, piped installs) - under
+  # set -e that aborted the whole install (kit-macos run #4). Treat EOF
+  # like a bare Enter: default to No.
+  read -r answer || answer=""
   [ "${answer:-n}" = "y" ] || [ "${answer:-n}" = "Y" ] && WITH_COLIBRI=1
 fi
 set_colibri() {
