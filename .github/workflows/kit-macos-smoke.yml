@@ -32,17 +32,18 @@ jobs:
     name: ${{ matrix.os }} (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
-    # macos-13 is the last Intel image and GitHub is sunsetting it - let it
-    # fail without failing the run; remove the entry when the label is gone.
+    # Intel runners are on their way out (the macos-13 label is already
+    # retired and unknown labels can block workflow registration) - let the
+    # Intel leg fail without failing the run; drop it when the label dies.
     continue-on-error: ${{ matrix.allowfail }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15     # Apple Silicon - what most friend machines are
+          - os: macos-15        # Apple Silicon - what most friend machines are
             arch: arm64
             allowfail: false
-          - os: macos-13     # legacy Intel
+          - os: macos-15-intel  # legacy Intel
             arch: x86_64
             allowfail: true
     env:
