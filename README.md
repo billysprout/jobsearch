@@ -38,6 +38,11 @@ Pre-answer the engine question with `--with-colibri` (`-WithColibri` on
 Windows). `--port 8790` and `--at 07:00` set the status-page port and the
 daily run time.
 
+When setup finishes it opens the status page (your config editor — tracks,
+keywords, watched companies) in the browser, with the token already filled
+in. To see a real digest immediately instead of waiting for the morning
+run: `cd deploy && docker compose run --rm scraper node scrape.mjs --once`.
+
 ## Every morning
 
 - **Your digest** — `deploy/digests/digest/<date>.md`, the scored list;

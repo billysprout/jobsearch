@@ -215,8 +215,26 @@ if (-not $SkipProbe) {
 
 Write-Host ""
 Write-Host "jobscrape is installed." -ForegroundColor Green
+# Onboarding tail: a ready-to-open status URL (loopback-only bind, so the
+# token never leaves this machine), auto-opened in the default browser.
+# CI guard for parity: redact the token when running under CI.
+$StatusToken = ""
+$StatusPort = ""
+Get-Content $envFile | ForEach-Object {
+  if ($_ -match '^JOBSCRAPE_CONFIG_TOKEN=(.+?)\s*$') { $StatusToken = $Matches[1] }
+  elseif ($_ -match '^JOBSCRAPE_CONFIG_PORT=(.+?)\s*$') { $StatusPort = $Matches[1] }
+}
+$StatusUrl = "http://127.0.0.1:$StatusPort/?token=$StatusToken"
+if ($env:CI -eq "true") {
+  $StatusUrl = "http://127.0.0.1:$StatusPort/?token=<redacted - see deploy\.env>"
+  Write-Host "  status page: $StatusUrl"
+  Write-Host "               (open the URL above with the token from deploy\.env)"
+} else {
+  try { Start-Process $StatusUrl } catch { }
+  Write-Host "  status page: $StatusUrl"
+  Write-Host "               (just opened in your browser; loopback-only - token stays local)"
+}
 Write-Host "  digests:     $(Join-Path $DeployDir 'digests')\digest\<date>.md"
-Write-Host "  status page: http://127.0.0.1:$Port/?token=<your token from deploy\.env>"
 Write-Host "  schedule:    daily at $RunAt (container restarts keep it alive)"
 Write-Host "  logs:        $(Join-Path $DeployDir 'logs')"
 if (-not $wantColibri) {
@@ -224,3 +242,10 @@ if (-not $wantColibri) {
   Write-Host "  colibri was not installed. To add it later, re-run:"
   Write-Host "    powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -WithColibri"
 }
+Write-Host ""
+Write-Host "Next steps:"
+Write-Host "  1. Set your tracks, keywords and watched companies on the status page"
+Write-Host "     (just opened) - changes apply on the next run."
+Write-Host "  2. Want your first real digest now, without waiting for ${RunAt}?"
+Write-Host "     cd $DeployDir; docker compose run --rm scraper node scrape.mjs --once"
+Write-Host "  3. That is it - the scraper takes it from here, daily at $RunAt."

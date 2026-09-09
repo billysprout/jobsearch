@@ -49,6 +49,14 @@ just run it again. It will:
 
 To pre-answer the colibri question: `-WithColibri` / `--with-colibri`.
 
+When setup finishes it opens the status page in your browser — set your
+tracks, keywords and watched companies there; changes apply on the next
+run. Don't want to wait for tomorrow's 07:00 run to see a real digest?
+
+```sh
+cd deploy && docker compose run --rm scraper node scrape.mjs --once
+```
+
 ## Where things land
 
 - **Digests**: `deploy/digests/digest/<date>.md` — the daily scored list,

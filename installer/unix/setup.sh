@@ -172,9 +172,29 @@ if [ "$SKIP_PROBE" -eq 0 ]; then
 fi
 
 DIGESTS_ABS="$(cd "$DEPLOY_DIR" && pwd)/digests"
+# Onboarding tail: hand over a ready-to-open status URL (loopback-only bind,
+# so the token in it never leaves this machine) and auto-open it. Under CI
+# the logs are public - print a redacted URL and skip the browser-open.
+STATUS_TOKEN="$(sed -n 's/^JOBSCRAPE_CONFIG_TOKEN=//p' "$ENV_FILE")"
+STATUS_PORT="$(sed -n 's/^JOBSCRAPE_CONFIG_PORT=//p' "$ENV_FILE")"
+if [ "${CI:-false}" = "true" ]; then
+  STATUS_URL="http://127.0.0.1:${STATUS_PORT:-$PORT}/?token=<redacted - see deploy/.env>"
+  STATUS_HINT="               (open the URL above with the token from deploy/.env)"
+else
+  STATUS_URL="http://127.0.0.1:${STATUS_PORT:-$PORT}/?token=${STATUS_TOKEN}"
+  STATUS_HINT="               (just opened in your browser; loopback-only - token stays local)"
+  open "$STATUS_URL" >/dev/null 2>&1 || xdg-open "$STATUS_URL" >/dev/null 2>&1 || true
+fi
 printf '\njobscrape is installed.\n'
+printf '  status page: %s\n' "$STATUS_URL"
+printf '%s\n' "$STATUS_HINT"
 printf '  digests:     %s/digest/<date>.md\n' "$DIGESTS_ABS"
-printf '  status page: http://127.0.0.1:%s/?token=<your token from deploy/.env>\n' "$PORT"
 printf '  schedule:    daily at %s (container restarts keep it alive)\n' "$RUN_AT"
 printf '  logs:        %s/logs\n' "$DEPLOY_DIR"
-[ "$WITH_COLIBRI" -eq 0 ] && printf '\n  colibri not installed. To add it later: ./setup.sh --with-colibri\n'
+if [ "$WITH_COLIBRI" -eq 0 ]; then
+  printf '\n  colibri not installed. To add it later: ./setup.sh --with-colibri\n'
+fi
+printf '\nNext steps:\n'
+printf '  1. Set your tracks, keywords and watched companies on the status page\n     (opened above) - changes apply on the next run.\n'
+printf '  2. Want your first real digest now, without waiting for %s?\n       cd "%s" && docker compose run --rm scraper node scrape.mjs --once\n' "$RUN_AT" "$DEPLOY_DIR"
+printf '  3. That is it - the scraper takes it from here, daily at %s.\n' "$RUN_AT"
