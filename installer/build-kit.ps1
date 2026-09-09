@@ -106,23 +106,30 @@ Add-Content (Join-Path $Stage "README.md") "`n---`n`nBuilt from openclaw-sandbox
 # separators, which unix `unzip` extracts as literal backslash filenames (kit
 # arrives broken for macOS/Linux friends). All writers here emit forward-slash
 # entries; -a picks zip from the extension.
+#
+# Top-level entries are named explicitly, never `.`: bsdtar's `.` operand
+# writes entries prefixed with `./`, and Windows Explorer's zip view silently
+# renders such archives as an EMPTY folder (valid archive, `tar -x` works,
+# Explorer sees 0 items - confirmed 2026-09-09 via Shell COM). Naming the
+# entries stores them unprefixed, which every consumer accepts.
+$topLevel = @(Get-ChildItem -Force $Stage | ForEach-Object { $_.Name })
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 if (Test-Path $Zip) { Remove-Item $Zip -Force }
 if ($IsWin) {
   # Full path on purpose: bare `tar` resolves to git-bash's GNU tar in some
   # environments, which reads C:\... as a remote host and fails.
-  & (Join-Path $env:SystemRoot "System32\tar.exe") -a -c -f $Zip -C $Stage .
+  & (Join-Path $env:SystemRoot "System32\tar.exe") -a -c -f $Zip -C $Stage @topLevel
   if ($LASTEXITCODE -ne 0) { throw "tar failed with exit code $LASTEXITCODE" }
 } elseif ($IsMacOS) {
   # /usr/bin/tar on macOS IS bsdtar - writes zip via -a.
-  & /usr/bin/tar -a -c -f $Zip -C $Stage .
+  & /usr/bin/tar -a -c -f $Zip -C $Stage @topLevel
   if ($LASTEXITCODE -ne 0) { throw "tar failed with exit code $LASTEXITCODE" }
 } else {
-  # GNU tar cannot write zip at all - Info-ZIP can. `zip -r .` includes
-  # dotfiles (.dockerignore ships in the kit).
+  # GNU tar cannot write zip at all - Info-ZIP can. Naming the directories
+  # (not `.`) keeps entries unprefixed; dotfiles inside named dirs ship.
   Push-Location $Stage
   try {
-    zip -q -r $Zip .
+    zip -q -r $Zip @topLevel
     if ($LASTEXITCODE -ne 0) { throw "zip failed with exit code $LASTEXITCODE" }
   } finally { Pop-Location }
 }
