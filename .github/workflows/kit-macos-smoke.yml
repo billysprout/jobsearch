@@ -1,0 +1,128 @@
+# kit-macos-smoke - exercises the friend deliverable end-to-end on real Mac
+# hardware (GitHub's macOS runners), no Mac required.
+#
+# What it proves, in order:
+#   1. build-kit.ps1 produces the zip under pwsh/macOS (cross-platform archiver)
+#   2. the zip extracts into a working kit (forward-slash entries, +x scripts)
+#   3. setup.sh works when Docker Desktop is NOT an option: colima + docker CLI
+#      + compose plugin - the exact recipe of a friend who skips Docker Desktop
+#   4. engines-on-host networking: Ollama bound to 0.0.0.0 is reachable from
+#      the containers via host.docker.internal -> host-gateway (through colima,
+#      127.0.0.1-bound host services are NOT reachable - Docker Desktop proxies
+#      loopback, colima does not; that is the one divergence this job pins)
+#   5. a real scrape -> gemma ranking -> digest published to deploy/digests
+#   6. negative test: the colibri installer must refuse cleanly at its disk
+#      gate (runners have nowhere near 420 GB) instead of failing late
+#
+# Manual trigger only. macOS minutes bill 10x against the free 2000/month on
+# private repos (~150 min per run of this job); unlimited-within-fair-use on
+# public repos. Uncomment the schedule once you know the repo's visibility.
+name: kit-macos-smoke
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "23 9 8 * *"   # monthly, on the 8th
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: ${{ matrix.os }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    # macos-13 is the last Intel image and GitHub is sunsetting it - let it
+    # fail without failing the run; remove the entry when the label is gone.
+    continue-on-error: ${{ matrix.allowfail }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15     # Apple Silicon - what most friend machines are
+            arch: arm64
+            allowfail: false
+          - os: macos-13     # legacy Intel
+            arch: x86_64
+            allowfail: true
+    env:
+      # Headless-docker networking workaround (see header note 4): containers
+      # reach host services through colima's host-gateway (the VM gateway =
+      # the Mac's real IP), which loopback-bound services never answer.
+      # Ollama defaults to 127.0.0.1 - this widens the bind so
+      # host.docker.internal resolves. Harmless under Docker Desktop.
+      OLLAMA_HOST: 0.0.0.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the kit zip (the exact deliverable friends receive)
+        shell: pwsh
+        run: ./installer/build-kit.ps1
+
+      - name: Extract kit to a clean directory
+        run: |
+          KIT="$RUNNER_TEMP/kit"
+          rm -rf "$KIT" && mkdir -p "$KIT"
+          tar -x -f installer/dist/jobscrape-kit-*.zip -C "$KIT"
+          ls "$KIT"
+          echo "KIT=$KIT" >> "$GITHUB_ENV"
+
+      # Headless docker workaround: macOS runners ship no Docker, and Docker
+      # Desktop cannot start headless in CI. colima is a plain Linux VM.
+      - name: Headless docker (colima + docker CLI + compose plugin)
+        run: |
+          brew install colima docker docker-compose
+          mkdir -p "$HOME/.docker/cli-plugins"
+          ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" "$HOME/.docker/cli-plugins/docker-compose"
+          colima start --cpu 3 --memory 6 --disk 40
+          docker info
+          docker compose version
+
+      # Covers: brew ollama -> gemma pull -> .env generation -> config seed ->
+      # compose up --build -> the built-in dry-run probe. The colibri prompt
+      # reads EOF on CI and defaults to No.
+      - name: Run setup.sh end to end
+        working-directory: ${{ env.KIT }}
+        run: bash setup.sh --at 07:00
+
+      # The real gate: a non-dry one-shot. Ranks 2 postings through host
+      # Ollama (gemma primary on the friend profile) and must publish a
+      # digest into deploy/digests.
+      - name: Non-dry one-shot scrape -> digest must appear
+        working-directory: ${{ env.KIT }}/deploy
+        run: |
+          docker compose run --rm scraper node scrape.mjs --once --limit 2
+          test -n "$(ls digests/digest/*.md 2>/dev/null)" || { echo "::error::no digest published"; exit 1; }
+          grep -h "Ranked by" digests/digest/*.md
+          echo "--- cards mentioning gemma ---"
+          grep -h "Ranker: gemma" digests/postings/*.md || echo "(none - check engine attribution)"
+
+      - name: Status page answers on loopback
+        run: |
+          TOKEN="$(grep '^JOBSCRAPE_CONFIG_TOKEN=' "$KIT/deploy/.env" | cut -d= -f2)"
+          PORT="$(grep '^JOBSCRAPE_CONFIG_PORT=' "$KIT/deploy/.env" | cut -d= -f2)"
+          curl -fsS "http://127.0.0.1:${PORT}/health"
+          code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/?token=${TOKEN}")"
+          [ "$code" = "200" ] || { echo "::error::status page returned ${code}"; exit 1; }
+
+      # Negative test: install-colibri.sh checks free disk BEFORE downloading
+      # anything - on a ~70 GB runner it must exit nonzero at the gate.
+      - name: Colibri installer must refuse cleanly (disk gate)
+        working-directory: ${{ env.KIT }}
+        run: |
+          if bash engine/install-colibri.sh --kit-root .; then
+            echo "::error::colibri install should have aborted at the disk gate"
+            exit 1
+          fi
+          echo "colibri installer refused as designed (insufficient disk)"
+
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kit-smoke-${{ matrix.os }}
+          path: |
+            ${{ env.KIT }}/deploy/digests
+            ${{ env.KIT }}/deploy/logs
+            ${{ env.KIT }}/engine/engines.log
+          if-no-files-found: ignore

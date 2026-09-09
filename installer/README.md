@@ -33,7 +33,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1
 **macOS / Linux**:
 
 ```sh
-./setup.sh
+bash setup.sh
 ```
 
 The script is idempotent — if it stops midway (a reboot, a closed laptop),
@@ -60,6 +60,22 @@ To pre-answer the colibri question: `-WithColibri` / `--with-colibri`.
   `deploy/logs/<date>.log` (compose)
 - **Schedule**: daily at 07:00 local (`JOBSCRAPE_RUN_AT` in `deploy/.env`)
 - **State**: `deploy/state/` — delete it to reset what the scraper has seen
+
+## Docker without Docker Desktop (colima)
+
+Any Docker that speaks the standard CLI works. If you use
+[colima](https://github.com/abiosoft/colima) instead of Docker Desktop,
+one difference matters: Docker Desktop forwards `host.docker.internal` to
+your machine's loopback, colima routes it to the VM's gateway (your real
+IP) - which a default Ollama (bound to `127.0.0.1`) never answers. Widen
+the bind before starting the stack:
+
+```sh
+OLLAMA_HOST=0.0.0.0 ollama serve
+```
+
+Everything else is identical - the compose file already maps
+`host.docker.internal` to the host gateway.
 
 ## Ranking, briefly
 

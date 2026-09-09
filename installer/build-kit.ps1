@@ -10,12 +10,18 @@
 #
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File installer\build-kit.ps1
 param(
-  [string]$OutDir = "$PSScriptRoot\dist"
+  [string]$OutDir = ""
 )
 $ErrorActionPreference = "Stop"
+# Cross-platform (CI builds the kit on macOS runners too): Windows PowerShell
+# 5.1 defines none of the $Is* variables, only pwsh Core does.
+$IsWin = ($PSVersionTable.PSVersion.Major -le 5) -or $IsWindows
+if (-not $OutDir) { $OutDir = Join-Path $PSScriptRoot "dist" }
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $Stamp = Get-Date -Format "yyyy-MM-dd"
-$Stage = Join-Path $env:TEMP "jobscrape-kit-stage"
+# $env:TEMP is Windows-only; macOS sets TMPDIR (trailing slash is fine for Join-Path).
+$TempRoot = $env:TEMP; if (-not $TempRoot) { $TempRoot = $env:TMPDIR }; if (-not $TempRoot) { $TempRoot = "/tmp" }
+$Stage = Join-Path $TempRoot "jobscrape-kit-stage"
 $Zip = Join-Path $OutDir "jobscrape-kit-$Stamp.zip"
 
 # --- the allowlist: repo-relative source -> kit-relative destination --------
@@ -70,8 +76,13 @@ foreach ($e in $entries) {
   }
 }
 
-# keep unix scripts executable through the zip (Info-ZIP external attr)
-Get-ChildItem $Stage -Recurse -Filter "*.sh" | ForEach-Object { $_.IsReadOnly = $false }
+# keep unix scripts executable through the zip (Info-ZIP external attr on
+# Windows; real +x on unix staging so the archiver records the exec bit)
+if ($IsWin) {
+  Get-ChildItem $Stage -Recurse -Filter "*.sh" | ForEach-Object { $_.IsReadOnly = $false }
+} else {
+  Get-ChildItem $Stage -Recurse -Filter "*.sh" | ForEach-Object { chmod +x $_.FullName }
+}
 
 # --- the assert: none of these may exist anywhere in the staging tree --------
 $forbidden = @(".env$", "base\.json$", "production\.json$", "^state$", "^logs$",
@@ -91,17 +102,30 @@ $sha = git -C $RepoRoot rev-parse --short HEAD
 Add-Content (Join-Path $Stage "README.md") "`n---`n`nBuilt from openclaw-sandbox@$sha on $Stamp."
 
 # --- zip ----------------------------------------------------------------------
-# bsdtar, not Compress-Archive: the latter writes backslash path separators,
-# which unix `unzip` extracts as literal backslash filenames (kit arrives
-# broken for macOS/Linux friends). bsdtar ships with Windows 10+ and writes
-# forward slashes; -a picks zip from the extension.
+# bsdtar/zip, not Compress-Archive: the latter writes backslash path
+# separators, which unix `unzip` extracts as literal backslash filenames (kit
+# arrives broken for macOS/Linux friends). All writers here emit forward-slash
+# entries; -a picks zip from the extension.
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 if (Test-Path $Zip) { Remove-Item $Zip -Force }
-# Full path on purpose: bare `tar` resolves to git-bash's GNU tar in some
-# environments, which reads C:\... as a remote host and fails.
-$BsdTar = Join-Path $env:SystemRoot "System32\tar.exe"
-& $BsdTar -a -c -f $Zip -C $Stage .
-if ($LASTEXITCODE -ne 0) { throw "tar failed with exit code $LASTEXITCODE" }
+if ($IsWin) {
+  # Full path on purpose: bare `tar` resolves to git-bash's GNU tar in some
+  # environments, which reads C:\... as a remote host and fails.
+  & (Join-Path $env:SystemRoot "System32\tar.exe") -a -c -f $Zip -C $Stage .
+  if ($LASTEXITCODE -ne 0) { throw "tar failed with exit code $LASTEXITCODE" }
+} elseif ($IsMacOS) {
+  # /usr/bin/tar on macOS IS bsdtar - writes zip via -a.
+  & /usr/bin/tar -a -c -f $Zip -C $Stage .
+  if ($LASTEXITCODE -ne 0) { throw "tar failed with exit code $LASTEXITCODE" }
+} else {
+  # GNU tar cannot write zip at all - Info-ZIP can. `zip -r .` includes
+  # dotfiles (.dockerignore ships in the kit).
+  Push-Location $Stage
+  try {
+    zip -q -r $Zip .
+    if ($LASTEXITCODE -ne 0) { throw "zip failed with exit code $LASTEXITCODE" }
+  } finally { Pop-Location }
+}
 if (-not (Test-Path $Zip)) { throw "zip was not written: $Zip" }
 Remove-Item $Stage -Recurse -Force
 
