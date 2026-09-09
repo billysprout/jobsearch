@@ -82,6 +82,9 @@ jobs:
           brew install clamav
           FRESHCONF="$(brew --prefix)/etc/clamav/freshclam.conf"
           [ -f "$FRESHCONF" ] || cp "$FRESHCONF.sample" "$FRESHCONF"
+          # The sample ships with the `Example` directive, which freshclam
+          # refuses to run under (gatekeeper run #1). Comment it out.
+          sed -i '' 's/^Example$/#Example/' "$FRESHCONF"
           freshclam
           TMP="$RUNNER_TEMP/gk"
           clamscan --infected --recursive "$TMP/incoming/jobscrape-kit.zip" "$TMP/kit"
