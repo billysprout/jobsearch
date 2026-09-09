@@ -427,7 +427,11 @@ async function chatTurn(configDir, message) {
     ],
     stream: false,
     format: CHAT_FORMAT, // structured output — gemma can only answer inside the schema
-    options: { temperature: 0 },
+    // num_ctx: the variant's Modelfile sets num_ctx 65536; without an
+    // override the chat forces the full 64k KV-cache allocation — instant
+    // OOM 500 on a 7 GB CI runner (smoke #9 arm64), while the scrape itself
+    // only ever loads a small per-request window. Chat prompts are ~1 KB.
+    options: { temperature: 0, num_ctx: 8192 },
   };
   let res;
   try {
