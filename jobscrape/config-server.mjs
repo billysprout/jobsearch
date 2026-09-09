@@ -62,7 +62,7 @@ const MAX_DAILY_LIMIT = 40; // DEFAULTS.selection.limit — colibri is 1-10+ min
 // extra_host in docker-compose.yml (jobscrape-config has it too).
 const OLLAMA_URL = (process.env.OLLAMA_URL || "http://host.docker.internal:11434").replace(/\/+$/, "");
 const CHAT_MODEL = process.env.JOBSCRAPE_CHAT_MODEL || "gemma4-e2b-64k";
-const CHAT_TIMEOUT_MS = 120000;
+const CHAT_TIMEOUT_MS = 240000; // cold CPU-only loads take minutes (smoke #10 Intel); GPU machines answer in seconds
 
 // --- helpers ---------------------------------------------------------------
 
@@ -427,11 +427,12 @@ async function chatTurn(configDir, message) {
     ],
     stream: false,
     format: CHAT_FORMAT, // structured output — gemma can only answer inside the schema
-    // num_ctx: the variant's Modelfile sets num_ctx 65536; without an
-    // override the chat forces the full 64k KV-cache allocation — instant
-    // OOM 500 on a 7 GB CI runner (smoke #9 arm64), while the scrape itself
-    // only ever loads a small per-request window. Chat prompts are ~1 KB.
-    options: { temperature: 0, num_ctx: 8192 },
+    // Deliberately NO num_ctx (or any other) option beyond sampling: an
+    // option that differs from the loaded session forces ollama to fully
+    // RELOAD the model — smoke #10 Intel threw away the scrape's warm 64k
+    // session for an 8192 request, and the cold CPU reload outlasted the
+    // client timeout. Match-or-nothing; sampling params don't reload.
+    options: { temperature: 0 },
   };
   let res;
   try {
